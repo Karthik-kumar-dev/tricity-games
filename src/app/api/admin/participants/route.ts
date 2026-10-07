@@ -3,6 +3,8 @@ import { dbService } from '@/lib/supabaseAdmin';
 import { verifyAdminSession } from '@/lib/adminAuth';
 
 export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+export const fetchCache = 'force-no-store';
 
 export async function GET(request: NextRequest) {
   try {
@@ -22,20 +24,32 @@ export async function GET(request: NextRequest) {
     const unmatched = participants.filter((p) => p.status === 'unmatched').length;
     const pairsCount = Math.floor(matched / 2);
 
-    return NextResponse.json({
-      success: true,
-      data: {
-        participants,
-        metrics: {
-          total,
-          waiting,
-          matched,
-          unmatched,
-          pairsCount,
+    return NextResponse.json(
+      {
+        success: true,
+        data: {
+          participants,
+          metrics: {
+            total,
+            waiting,
+            matched,
+            unmatched,
+            pairsCount,
+          },
+          isLive: dbService.isLive(),
         },
-        isLive: dbService.isLive(),
       },
-    });
+      {
+        headers: {
+          'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0',
+          'CDN-Cache-Control': 'no-store',
+          'Vercel-CDN-Cache-Control': 'no-store',
+          'Surrogate-Control': 'no-store',
+          Pragma: 'no-cache',
+          Expires: '0',
+        },
+      }
+    );
   } catch (error: any) {
     console.error('Admin participants fetch error:', error);
     return NextResponse.json(

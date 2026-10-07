@@ -59,5 +59,6 @@ export async function seedParticipants(count = 1000) {
 }
 
 if (process.argv[1]?.endsWith('seed-1000.mjs')) {
-  seedParticipants(1000).catch(console.error);
+  const count = parseInt(process.argv[2] || '1000', 10);
+  seedParticipants(count).catch(console.error);
 }

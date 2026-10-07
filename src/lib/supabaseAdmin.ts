@@ -507,18 +507,25 @@ export const dbService = {
 
   // Clear all data
   clearAllData: async (): Promise<{ success: boolean; count: number; error?: string }> => {
-    // Invalidate status cache
+    // Invalidate all status and matching caches
     statusCache.clear();
+    lastMatchingResult = null;
+    lastMatchingTimestamp = 0;
+    lastResetResult = null;
+    lastResetTimestamp = 0;
+    inFlightMatchingPromise = null;
+    inFlightResetPromise = null;
 
     if (!isServerSupabaseConfigured || !supabaseAdmin) {
       const res = mockStore.clearData();
       return { success: true, count: res.count };
     }
 
+    // Delete all records unconditionally
     const { count, error } = await supabaseAdmin
       .from('participants')
       .delete({ count: 'exact' })
-      .gte('created_at', '1970-01-01');
+      .not('id', 'is', null);
 
     if (error) {
       console.error('Error clearing participants table:', error);

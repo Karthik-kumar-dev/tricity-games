@@ -52,7 +52,8 @@ export function AdminDashboard({ token, onLogout }: AdminDashboardProps) {
         cache: 'no-store',
         headers: {
           'x-admin-token': token,
-          'Cache-Control': 'no-cache',
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
         },
       });
 
@@ -167,9 +168,10 @@ export function AdminDashboard({ token, onLogout }: AdminDashboardProps) {
 
       const data = await res.json();
       if (res.ok && data.success) {
+        setParticipants([]);
         showToast(data.message || 'Database wiped. All students reset!', 'success');
         setShowClearModal(false);
-        await fetchParticipants();
+        await fetchParticipants(true);
       } else {
         showToast(data.error || 'Failed to clear database', 'error');
       }

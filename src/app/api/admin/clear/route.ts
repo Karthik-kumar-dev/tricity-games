@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { revalidatePath } from 'next/cache';
 import { dbService } from '@/lib/supabaseAdmin';
 import { verifyAdminSession } from '@/lib/adminAuth';
+
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
 
 export async function POST(request: NextRequest) {
   try {
@@ -20,11 +24,27 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    return NextResponse.json({
-      success: true,
-      deletedCount: result.count,
-      message: `Successfully wiped ${result.count} records. All student sessions reset.`,
-    });
+    // Force purge Next.js server and CDN caches immediately
+    try {
+      revalidatePath('/api/admin/participants');
+      revalidatePath('/admin');
+      revalidatePath('/');
+    } catch (e) {
+      // Ignore in environments where revalidatePath is a noop
+    }
+
+    return NextResponse.json(
+      {
+        success: true,
+        deletedCount: result.count,
+        message: `Successfully wiped ${result.count} records. All student sessions reset.`,
+      },
+      {
+        headers: {
+          'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+        },
+      }
+    );
   } catch (error: any) {
     console.error('Clear data API error:', error);
     return NextResponse.json(

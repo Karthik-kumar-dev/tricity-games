@@ -17,8 +17,12 @@ export default function AdminPage() {
       try {
         const savedToken = localStorage.getItem(ADMIN_STORAGE_KEY);
         if (savedToken) {
-          const res = await fetch('/api/admin/participants', {
-            headers: { 'x-admin-token': savedToken },
+          const res = await fetch(`/api/admin/participants?_t=${Date.now()}`, {
+            cache: 'no-store',
+            headers: {
+              'x-admin-token': savedToken,
+              'Cache-Control': 'no-cache, no-store, must-revalidate',
+            },
           });
           if (res.ok) {
             setToken(savedToken);

@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { revalidatePath } from 'next/cache';
 import { dbService } from '@/lib/supabaseAdmin';
 import { verifyAdminSession } from '@/lib/adminAuth';
+
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
 
 export async function POST(request: NextRequest) {
   try {
@@ -20,11 +24,26 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    return NextResponse.json({
-      success: true,
-      resetCount: result.count,
-      message: `Reset ${result.count} students back to queue! Ready for next round.`,
-    });
+    try {
+      revalidatePath('/api/admin/participants');
+      revalidatePath('/admin');
+      revalidatePath('/');
+    } catch (e) {
+      // Ignore
+    }
+
+    return NextResponse.json(
+      {
+        success: true,
+        resetCount: result.count,
+        message: `Reset ${result.count} students back to queue! Ready for next round.`,
+      },
+      {
+        headers: {
+          'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+        },
+      }
+    );
   } catch (error: any) {
     console.error('Reset matches API error:', error);
     return NextResponse.json(
