@@ -42,6 +42,8 @@ DROP POLICY IF EXISTS "Public cannot update directly" ON public.participants;
 DROP POLICY IF EXISTS "Public cannot delete directly" ON public.participants;
 
 -- 5. Enable Supabase Realtime for instant updates on client devices (safe to re-run)
+ALTER TABLE public.participants REPLICA IDENTITY FULL;
+
 DO $$
 BEGIN
     IF NOT EXISTS (
@@ -82,8 +84,14 @@ BEGIN
         matched_at = NULL
     WHERE status != 'waiting';
 
-    -- 2. Collect all participant IDs in random order
-    SELECT array_agg(id ORDER BY random()) INTO pair_ids FROM public.participants;
+    -- 2. Collect all participant IDs in pure cryptographic random order using a distinct subquery
+    -- gen_random_uuid() generates uniform 128-bit CSPRNG tokens per row, guaranteeing true uniform randomness
+    SELECT array_agg(sub.id) INTO pair_ids 
+    FROM (
+        SELECT id 
+        FROM public.participants 
+        ORDER BY gen_random_uuid()
+    ) sub;
     total_count := coalesce(array_length(pair_ids, 1), 0);
 
     IF total_count < 2 THEN
@@ -129,6 +137,8 @@ BEGIN
     );
 END;
 $$;
+
+GRANT EXECUTE ON FUNCTION public.pair_participants() TO anon, authenticated, service_role;
 
 -- ==============================================================================
 -- ATOMIC REGISTRATION — handles race conditions via ON CONFLICT

@@ -123,13 +123,14 @@ export default function StudentPage() {
     setLoadingInitial(false);
   }, [checkStatus]);
 
-  // Set up Supabase Realtime listener — PRIMARY update mechanism
+  // Set up Supabase Realtime listener — PRIMARY real-time update mechanism
   useEffect(() => {
     if (!participant || !isSupabaseConfigured || !supabase) return;
 
-    realtimeActiveRef.current = true;
+    realtimeActiveRef.current = false;
 
-    const channel = supabase
+    // 1. Direct row-level postgres_changes listener
+    const rowChannel = supabase
       .channel(`student:${participant.id}`)
       .on(
         'postgres_changes',
@@ -139,28 +140,60 @@ export default function StudentPage() {
           table: 'participants',
           filter: `id=eq.${participant.id}`,
         },
-        (payload: any) => {
-          // If the payload already tells us the student is unmatched, apply directly without network fetch
-          if (payload?.new && payload.new.status === 'unmatched') {
+        async (payload: any) => {
+          if (!payload?.new) return;
+          const newRow = payload.new;
+
+          // If admin reset matches back to queue, return directly to waiting card
+          if (newRow.status === 'waiting') {
+            setParticipant((prev) =>
+              prev ? { ...prev, status: 'waiting', matched_with_id: null, partner: null, matched_at: null } : null
+            );
+            return;
+          }
+
+          // If unmatched (odd count solo reserve)
+          if (newRow.status === 'unmatched') {
             setParticipant((prev) =>
               prev ? { ...prev, status: 'unmatched', matched_with_id: null, partner: null } : null
             );
             return;
           }
 
-          // If admin reset matches back to queue, return directly to waiting card
-          if (payload?.new && payload.new.status === 'waiting') {
-            setParticipant((prev) =>
-              prev ? { ...prev, status: 'waiting', matched_with_id: null, partner: null } : null
-            );
-            return;
-          }
+          // If MATCHED! Instant client-side hydration without middleman server cache
+          if (newRow.status === 'matched') {
+            const partnerId = newRow.matched_with_id;
+            if (partnerId && supabase) {
+              try {
+                // Fetch partner directly via Supabase anon client in ~30ms
+                const { data: partnerData } = await supabase
+                  .from('participants')
+                  .select('id, name, phone')
+                  .eq('id', partnerId)
+                  .maybeSingle();
 
-          // Anti-thundering-herd: add random jitter (50ms - 1500ms) so 1000+ students don't hit the server at the exact same millisecond
-          const jitter = Math.floor(Math.random() * 1450) + 50;
-          setTimeout(() => {
-            checkStatus(participant.id, participant.phone);
-          }, jitter);
+                setParticipant((prev) => {
+                  const updated: Participant = {
+                    ...(prev || {}),
+                    ...newRow,
+                    partner: partnerData || null,
+                  };
+                  try {
+                    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+                      id: updated.id,
+                      phone: updated.phone,
+                    }));
+                  } catch (e) {}
+                  return updated;
+                });
+              } catch (e) {
+                // Fallback to server status check
+                checkStatus(newRow.id, newRow.phone);
+              }
+            } else {
+              checkStatus(newRow.id, newRow.phone);
+            }
+          }
         }
       )
       .on(
@@ -185,51 +218,63 @@ export default function StudentPage() {
         }
       });
 
+    // 2. Global broadcast channel for instant multi-tenant round events
+    const broadcastChannel = supabase
+      .channel('hackathon-broadcast')
+      .on('broadcast', { event: 'matching_completed' }, () => {
+        if (participantRef.current) {
+          checkStatus(participantRef.current.id, participantRef.current.phone);
+        }
+      })
+      .on('broadcast', { event: 'reset_completed' }, () => {
+        setParticipant((prev) =>
+          prev ? { ...prev, status: 'waiting', matched_with_id: null, partner: null } : null
+        );
+        if (participantRef.current) {
+          checkStatus(participantRef.current.id, participantRef.current.phone);
+        }
+      })
+      .on('broadcast', { event: 'database_cleared' }, () => {
+        localStorage.removeItem(STORAGE_KEY);
+        setParticipant(null);
+      })
+      .subscribe();
+
     return () => {
       realtimeActiveRef.current = false;
-      supabase?.removeChannel(channel);
+      supabase?.removeChannel(rowChannel);
+      supabase?.removeChannel(broadcastChannel);
     };
   }, [participant, checkStatus]);
 
-  // Smart Polling fallback with EXPONENTIAL BACKOFF
-  // Only runs when Realtime is not active. Backs off from 3s → 15s max.
+  // High-responsiveness polling fallback
+  // When in queue waiting, polls every 2.5s so no student waits more than 2.5s even if WebSockets drop
   useEffect(() => {
     if (!participant) return;
 
-    // In multi-round mode, poll every 10s even when matched to catch new rounds if Realtime drops
     const isResolved = participant.status === 'matched' || participant.status === 'unmatched';
-
     let timeoutId: ReturnType<typeof setTimeout>;
 
     const schedulePoll = () => {
-      const baseInterval = isResolved ? 10000 : (realtimeActiveRef.current ? 8000 : pollIntervalRef.current);
+      // 2.5s while waiting for match; 8s once already resolved
+      const interval = isResolved ? 8000 : 2500;
 
       timeoutId = setTimeout(async () => {
-        // Skip polling when tab is hidden
         if (document.hidden) {
           schedulePoll();
           return;
         }
 
         await checkStatus(participant.id, participant.phone);
-
-        // Exponential backoff: increase interval up to 15s (only when waiting)
-        if (!isResolved && !realtimeActiveRef.current) {
-          pollIntervalRef.current = Math.min(pollIntervalRef.current * 1.3, 15000);
-        }
-
         schedulePoll();
-      }, baseInterval);
+      }, interval);
     };
 
-    // Reset backoff when participant changes (e.g., newly registered)
-    pollIntervalRef.current = 3000;
     schedulePoll();
 
     // Visibility change handler — immediately poll when user returns to tab
     const handleVisibilityChange = () => {
       if (!document.hidden && participantRef.current) {
-        pollIntervalRef.current = 3000; // Reset backoff on tab focus
         checkStatus(participantRef.current.id, participantRef.current.phone);
       }
     };

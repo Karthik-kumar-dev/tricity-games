@@ -16,6 +16,9 @@ import {
   UserCheck,
   UserX,
   RotateCcw,
+  LayoutGrid,
+  List,
+  Dices,
 } from 'lucide-react';
 import { Participant } from '@/lib/types';
 import { ConfirmModal } from './ConfirmModal';
@@ -37,6 +40,7 @@ export function AdminDashboard({ token, onLogout }: AdminDashboardProps) {
   const [showResetModal, setShowResetModal] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterStatus, setFilterStatus] = useState<'all' | 'waiting' | 'matched' | 'unmatched'>('all');
+  const [viewMode, setViewMode] = useState<'table' | 'teams'>('table');
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
 
   const showToast = (text: string, type: 'success' | 'error' | 'info' = 'success') => {
@@ -135,7 +139,10 @@ export function AdminDashboard({ token, onLogout }: AdminDashboardProps) {
 
       const data = await res.json();
       if (res.ok && data.success) {
-        showToast(data.message || 'Matching completed!', 'success');
+        showToast(data.message || `Paired teams with pure random assignment across the pool! 🎲`, 'success');
+        if ((data.data?.pairs ?? 1) > 0) {
+          setViewMode('teams');
+        }
         await fetchParticipants();
       } else {
         showToast(data.error || 'Failed to execute matching', 'error');
@@ -232,7 +239,36 @@ export function AdminDashboard({ token, onLogout }: AdminDashboardProps) {
     return map;
   }, [participants]);
 
-  // Filtered & Searched list
+  // Compute distinct matched pairs (Teams)
+  const matchedPairs = useMemo(() => {
+    const seen = new Set<string>();
+    const list: { teamNum: number; p1: Participant; p2: Participant }[] = [];
+    let count = 1;
+
+    for (const p of participants) {
+      if (p.status === 'matched' && p.matched_with_id && !seen.has(p.id)) {
+        const partner = participantMap.get(p.matched_with_id);
+        if (partner) {
+          seen.add(p.id);
+          seen.add(partner.id);
+          list.push({ teamNum: count++, p1: p, p2: partner });
+        }
+      }
+    }
+    return list;
+  }, [participants, participantMap]);
+
+  // Map participant ID to their assigned Team number
+  const teamAssignmentMap = useMemo(() => {
+    const map = new Map<string, number>();
+    matchedPairs.forEach((pair) => {
+      map.set(pair.p1.id, pair.teamNum);
+      map.set(pair.p2.id, pair.teamNum);
+    });
+    return map;
+  }, [matchedPairs]);
+
+  // Filtered & Searched list for Table view
   const filteredList = useMemo(() => {
     return participants.filter((p) => {
       // Filter tab
@@ -249,6 +285,25 @@ export function AdminDashboard({ token, onLogout }: AdminDashboardProps) {
       return true;
     });
   }, [participants, filterStatus, searchQuery]);
+
+  // Filtered pairs for Teams view
+  const filteredPairs = useMemo(() => {
+    if (!searchQuery.trim()) return matchedPairs;
+    const q = searchQuery.toLowerCase();
+    return matchedPairs.filter(
+      (pair) =>
+        pair.p1.name.toLowerCase().includes(q) ||
+        pair.p1.phone.toLowerCase().includes(q) ||
+        pair.p2.name.toLowerCase().includes(q) ||
+        pair.p2.phone.toLowerCase().includes(q) ||
+        `team ${pair.teamNum}`.includes(q)
+    );
+  }, [matchedPairs, searchQuery]);
+
+  // Solo unmatched students (odd count leftover)
+  const soloUnmatchedList = useMemo(() => {
+    return participants.filter((p) => p.status === 'unmatched');
+  }, [participants]);
 
   return (
     <div style={{ maxWidth: '1200px', width: '100%', margin: '0 auto', padding: '32px 20px' }}>
@@ -552,7 +607,7 @@ export function AdminDashboard({ token, onLogout }: AdminDashboardProps) {
           </span>
           <input
             type="text"
-            placeholder="Search name or phone..."
+            placeholder={viewMode === 'teams' ? "Search team member or 'Team 1'..." : "Search name or phone..."}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="input-field"
@@ -560,167 +615,461 @@ export function AdminDashboard({ token, onLogout }: AdminDashboardProps) {
           />
         </div>
 
-        {/* Filter Pills */}
-        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-          {(['all', 'waiting', 'matched', 'unmatched'] as const).map((status) => (
+        {/* View Mode Toggle and Filter Pills */}
+        <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+          {/* View Mode Switcher */}
+          <div
+            style={{
+              display: 'flex',
+              background: '#f1f5f9',
+              borderRadius: '999px',
+              padding: '3px',
+              border: '1px solid #e2e8f0',
+            }}
+          >
             <button
-              key={status}
               type="button"
-              onClick={() => setFilterStatus(status)}
+              onClick={() => setViewMode('table')}
               style={{
-                padding: '8px 16px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '6px 14px',
                 borderRadius: '999px',
                 fontSize: '12px',
                 fontWeight: 700,
+                border: 'none',
                 cursor: 'pointer',
-                border: '1px solid',
-                textTransform: 'uppercase',
-                transition: 'all 0.2s ease',
-                background:
-                  filterStatus === status
-                    ? '#eef2ff'
-                    : '#ffffff',
-                borderColor:
-                  filterStatus === status ? '#c7d2fe' : '#e2e8f0',
-                color: filterStatus === status ? '#4f46e5' : '#64748b',
-                boxShadow: filterStatus === status ? '0 1px 3px rgba(79, 70, 229, 0.15)' : 'none',
+                background: viewMode === 'table' ? '#ffffff' : 'transparent',
+                color: viewMode === 'table' ? '#0f172a' : '#64748b',
+                boxShadow: viewMode === 'table' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                transition: 'all 0.15s ease',
               }}
             >
-              {status} ({status === 'all' ? totalCount : status === 'waiting' ? waitingCount : status === 'matched' ? matchedCount : unmatchedCount})
+              <List size={14} />
+              <span>All Participants ({totalCount})</span>
             </button>
-          ))}
+            <button
+              type="button"
+              onClick={() => setViewMode('teams')}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '6px 14px',
+                borderRadius: '999px',
+                fontSize: '12px',
+                fontWeight: 700,
+                border: 'none',
+                cursor: 'pointer',
+                background: viewMode === 'teams' ? '#4f46e5' : 'transparent',
+                color: viewMode === 'teams' ? '#ffffff' : '#64748b',
+                boxShadow: viewMode === 'teams' ? '0 1px 3px rgba(79,70,229,0.3)' : 'none',
+                transition: 'all 0.15s ease',
+              }}
+            >
+              <Users size={14} />
+              <span>Matched Teams ({matchedPairs.length})</span>
+            </button>
+          </div>
+
+          {/* Filter Pills (only shown in table view) */}
+          {viewMode === 'table' && (
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              {(['all', 'waiting', 'matched', 'unmatched'] as const).map((status) => (
+                <button
+                  key={status}
+                  type="button"
+                  onClick={() => setFilterStatus(status)}
+                  style={{
+                    padding: '8px 16px',
+                    borderRadius: '999px',
+                    fontSize: '12px',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    border: '1px solid',
+                    textTransform: 'uppercase',
+                    transition: 'all 0.2s ease',
+                    background:
+                      filterStatus === status
+                        ? '#eef2ff'
+                        : '#ffffff',
+                    borderColor:
+                      filterStatus === status ? '#c7d2fe' : '#e2e8f0',
+                    color: filterStatus === status ? '#4f46e5' : '#64748b',
+                    boxShadow: filterStatus === status ? '0 1px 3px rgba(79, 70, 229, 0.15)' : 'none',
+                  }}
+                >
+                  {status} ({status === 'all' ? totalCount : status === 'waiting' ? waitingCount : status === 'matched' ? matchedCount : unmatchedCount})
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Participant List Table */}
-      <div className="glass-panel" style={{ overflow: 'hidden', background: '#ffffff', border: '1px solid #e2e8f0' }}>
-        {loading && participants.length === 0 ? (
-          <div style={{ padding: '60px 20px', textAlign: 'center', color: '#64748b' }}>
+      {/* VIEW MODE 1: MATCHED TEAMS GRID */}
+      {viewMode === 'teams' ? (
+        <div>
+          {/* Solo Reserve Banner if odd registration count */}
+          {soloUnmatchedList.length > 0 && (
             <div
               style={{
-                width: '32px',
-                height: '32px',
-                borderRadius: '50%',
-                border: '3px solid rgba(79, 70, 229, 0.2)',
-                borderTopColor: '#4f46e5',
-                animation: 'spin 1s linear infinite',
-                margin: '0 auto 12px auto',
+                background: '#fff1f2',
+                border: '1.5px solid #fecdd3',
+                borderRadius: '12px',
+                padding: '14px 20px',
+                marginBottom: '20px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
+                gap: '12px',
               }}
-            />
-            <p>Loading participants list...</p>
-          </div>
-        ) : filteredList.length === 0 ? (
-          <div style={{ padding: '60px 20px', textAlign: 'center', color: '#64748b' }}>
-            <Users size={36} style={{ margin: '0 auto 12px auto', opacity: 0.4 }} />
-            <p style={{ fontSize: '16px', fontWeight: 600, color: '#0f172a' }}>
-              {participants.length === 0 ? 'No participants registered yet' : 'No matching participants found'}
-            </p>
-            <p style={{ fontSize: '13px', marginTop: '4px' }}>
-              {participants.length === 0
-                ? 'Send the landing page link to students to start collecting registrations!'
-                : 'Try adjusting your search query or filter tab.'}
-            </p>
-          </div>
-        ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
-              <thead>
-                <tr style={{ borderBottom: '1px solid #e2e8f0', background: '#f8fafc' }}>
-                  <th style={{ padding: '16px 20px', fontSize: '12px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
-                    Participant
-                  </th>
-                  <th style={{ padding: '16px 20px', fontSize: '12px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
-                    Phone Number
-                  </th>
-                  <th style={{ padding: '16px 20px', fontSize: '12px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
-                    Status
-                  </th>
-                  <th style={{ padding: '16px 20px', fontSize: '12px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
-                    Paired Partner
-                  </th>
-                  <th style={{ padding: '16px 20px', fontSize: '12px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
-                    Registered At
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredList.map((p) => {
-                  const partner = p.matched_with_id ? participantMap.get(p.matched_with_id) : null;
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <UserX size={18} color="#e11d48" />
+                <div>
+                  <span style={{ fontWeight: 800, color: '#9f1239', fontSize: '13px' }}>
+                    Solo Reserve Student (Odd Participant Count):
+                  </span>
+                  <span style={{ marginLeft: '8px', color: '#881337', fontWeight: 600, fontSize: '14px' }}>
+                    {soloUnmatchedList[0].name} ({formatPhoneForDisplay(soloUnmatchedList[0].phone)})
+                  </span>
+                </div>
+              </div>
+              <span style={{ fontSize: '12px', color: '#be123c', fontWeight: 600 }}>
+                Will automatically be paired in Round 2 when more students join!
+              </span>
+            </div>
+          )}
 
-                  return (
-                    <tr
-                      key={p.id}
+          {loading && participants.length === 0 ? (
+            <div className="glass-panel" style={{ padding: '60px 20px', textAlign: 'center', color: '#64748b', background: '#fff' }}>
+              <div
+                style={{
+                  width: '32px',
+                  height: '32px',
+                  borderRadius: '50%',
+                  border: '3px solid rgba(79, 70, 229, 0.2)',
+                  borderTopColor: '#4f46e5',
+                  animation: 'spin 1s linear infinite',
+                  margin: '0 auto 12px auto',
+                }}
+              />
+              <p>Loading teams...</p>
+            </div>
+          ) : filteredPairs.length === 0 ? (
+            <div className="glass-panel" style={{ padding: '60px 20px', textAlign: 'center', color: '#64748b', background: '#fff', border: '1px solid #e2e8f0' }}>
+              <Users size={40} style={{ margin: '0 auto 12px auto', opacity: 0.4 }} />
+              <p style={{ fontSize: '17px', fontWeight: 700, color: '#0f172a' }}>
+                {matchedPairs.length === 0 ? 'No matched teams yet' : 'No teams match your search'}
+              </p>
+              <p style={{ fontSize: '14px', marginTop: '6px' }}>
+                {matchedPairs.length === 0
+                  ? 'Click "Run 1-to-1 Matching" above to pair all waiting students randomly!'
+                  : 'Try searching by a different name, phone, or "Team 1"'}
+              </p>
+            </div>
+          ) : (
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+                <span style={{ fontSize: '13px', fontWeight: 700, color: '#475569' }}>
+                  Showing {filteredPairs.length} of {matchedPairs.length} Teams
+                </span>
+                <span style={{ fontSize: '12px', fontWeight: 700, color: '#059669', background: '#ecfdf5', padding: '4px 10px', borderRadius: '999px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <Dices size={13} /> 100% Cryptographic Random 1-to-1 Assignment
+                </span>
+              </div>
+
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))',
+                  gap: '16px',
+                }}
+              >
+                {filteredPairs.map((pair) => (
+                  <div
+                    key={`team-${pair.teamNum}`}
+                    className="glass-panel"
+                    style={{
+                      background: '#ffffff',
+                      border: '1.5px solid #e0e7ff',
+                      borderRadius: '16px',
+                      padding: '18px 20px',
+                      boxShadow: '0 4px 12px rgba(79, 70, 229, 0.04)',
+                    }}
+                  >
+                    <div
                       style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        marginBottom: '14px',
+                        paddingBottom: '10px',
                         borderBottom: '1px solid #f1f5f9',
-                        transition: 'background 0.15s ease',
                       }}
-                      onMouseEnter={(e) => (e.currentTarget.style.background = '#f8fafc')}
-                      onMouseLeave={(e) => (e.currentTarget.style.background = '#ffffff')}
                     >
-                      {/* Name */}
-                      <td style={{ padding: '16px 20px' }}>
-                        <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '15px' }}>
-                          {p.name}
-                        </div>
-                      </td>
+                      <span
+                        style={{
+                          background: '#eef2ff',
+                          color: '#4f46e5',
+                          fontWeight: 800,
+                          fontSize: '13px',
+                          padding: '4px 12px',
+                          borderRadius: '8px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                        }}
+                      >
+                        <Users size={14} /> Team #{pair.teamNum}
+                      </span>
+                      <span
+                        style={{
+                          fontSize: '11px',
+                          color: '#059669',
+                          fontWeight: 700,
+                          background: '#ecfdf5',
+                          padding: '3px 8px',
+                          borderRadius: '999px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                        }}
+                      >
+                        <Dices size={12} /> Paired
+                      </span>
+                    </div>
 
-                      {/* Phone */}
-                      <td style={{ padding: '16px 20px' }}>
-                        <div style={{ fontFamily: 'monospace', color: '#4f46e5', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                          <Phone size={13} color="#94a3b8" />
-                          <span>{formatPhoneForDisplay(p.phone)}</span>
-                        </div>
-                      </td>
-
-                      {/* Status */}
-                      <td style={{ padding: '16px 20px' }}>
-                        <span
-                          className={`badge ${
-                            p.status === 'matched'
-                              ? 'badge-matched'
-                              : p.status === 'unmatched'
-                              ? 'badge-unmatched'
-                              : 'badge-waiting'
-                          }`}
-                        >
-                          {p.status}
-                        </span>
-                      </td>
-
-                      {/* Paired Partner */}
-                      <td style={{ padding: '16px 20px' }}>
-                        {p.status === 'matched' && partner ? (
-                          <div>
-                            <div style={{ fontWeight: 700, color: '#059669', fontSize: '14px' }}>
-                              {partner.name}
-                            </div>
-                            <div style={{ fontFamily: 'monospace', fontSize: '12px', color: '#64748b' }}>
-                              {formatPhoneForDisplay(partner.phone)}
-                            </div>
+                    {/* Member 1 & 2 */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      {/* Member 1 */}
+                      <div
+                        style={{
+                          background: '#f8fafc',
+                          padding: '10px 14px',
+                          borderRadius: '10px',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                        }}
+                      >
+                        <div>
+                          <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '14px' }}>{pair.p1.name}</div>
+                          <div style={{ fontSize: '12px', color: '#4f46e5', fontFamily: 'monospace' }}>
+                            {formatPhoneForDisplay(pair.p1.phone)}
                           </div>
-                        ) : p.status === 'unmatched' ? (
-                          <span style={{ fontSize: '13px', color: '#e11d48', fontWeight: 600 }}>
-                            Solo Reserve (Odd Count)
-                          </span>
-                        ) : (
-                          <span style={{ fontSize: '13px', color: 'var(--text-dim)' }}>
-                            Waiting for match run
-                          </span>
-                        )}
-                      </td>
+                        </div>
+                        <a
+                          href={`tel:${pair.p1.phone}`}
+                          style={{
+                            color: '#059669',
+                            background: '#ecfdf5',
+                            padding: '6px',
+                            borderRadius: '6px',
+                            display: 'flex',
+                            alignItems: 'center',
+                          }}
+                          title="Call student"
+                        >
+                          <Phone size={14} />
+                        </a>
+                      </div>
 
-                      {/* Created At */}
-                      <td style={{ padding: '16px 20px', fontSize: '13px', color: 'var(--text-dim)' }}>
-                        {new Date(p.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+                      <div style={{ textAlign: 'center', color: '#94a3b8', fontSize: '11px', fontWeight: 800, letterSpacing: '0.5px' }}>
+                        🤝 PAIRED WITH
+                      </div>
+
+                      {/* Member 2 */}
+                      <div
+                        style={{
+                          background: '#f8fafc',
+                          padding: '10px 14px',
+                          borderRadius: '10px',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                        }}
+                      >
+                        <div>
+                          <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '14px' }}>{pair.p2.name}</div>
+                          <div style={{ fontSize: '12px', color: '#4f46e5', fontFamily: 'monospace' }}>
+                            {formatPhoneForDisplay(pair.p2.phone)}
+                          </div>
+                        </div>
+                        <a
+                          href={`tel:${pair.p2.phone}`}
+                          style={{
+                            color: '#059669',
+                            background: '#ecfdf5',
+                            padding: '6px',
+                            borderRadius: '6px',
+                            display: 'flex',
+                            alignItems: 'center',
+                          }}
+                          title="Call student"
+                        >
+                          <Phone size={14} />
+                        </a>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      ) : (
+        /* VIEW MODE 2: ALL PARTICIPANTS TABLE */
+        <div className="glass-panel" style={{ overflow: 'hidden', background: '#ffffff', border: '1px solid #e2e8f0' }}>
+          {loading && participants.length === 0 ? (
+            <div style={{ padding: '60px 20px', textAlign: 'center', color: '#64748b' }}>
+              <div
+                style={{
+                  width: '32px',
+                  height: '32px',
+                  borderRadius: '50%',
+                  border: '3px solid rgba(79, 70, 229, 0.2)',
+                  borderTopColor: '#4f46e5',
+                  animation: 'spin 1s linear infinite',
+                  margin: '0 auto 12px auto',
+                }}
+              />
+              <p>Loading participants list...</p>
+            </div>
+          ) : filteredList.length === 0 ? (
+            <div style={{ padding: '60px 20px', textAlign: 'center', color: '#64748b' }}>
+              <Users size={36} style={{ margin: '0 auto 12px auto', opacity: 0.4 }} />
+              <p style={{ fontSize: '16px', fontWeight: 600, color: '#0f172a' }}>
+                {participants.length === 0 ? 'No participants registered yet' : 'No matching participants found'}
+              </p>
+              <p style={{ fontSize: '13px', marginTop: '4px' }}>
+                {participants.length === 0
+                  ? 'Send the landing page link to students to start collecting registrations!'
+                  : 'Try adjusting your search query or filter tab.'}
+              </p>
+            </div>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid #e2e8f0', background: '#f8fafc' }}>
+                    <th style={{ padding: '16px 20px', fontSize: '12px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
+                      Participant
+                    </th>
+                    <th style={{ padding: '16px 20px', fontSize: '12px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
+                      Phone Number
+                    </th>
+                    <th style={{ padding: '16px 20px', fontSize: '12px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
+                      Status
+                    </th>
+                    <th style={{ padding: '16px 20px', fontSize: '12px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
+                      Paired Partner
+                    </th>
+                    <th style={{ padding: '16px 20px', fontSize: '12px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
+                      Registered At
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredList.map((p) => {
+                    const partner = p.matched_with_id ? participantMap.get(p.matched_with_id) : null;
+                    const teamNum = teamAssignmentMap.get(p.id);
+
+                    return (
+                      <tr
+                        key={p.id}
+                        style={{
+                          borderBottom: '1px solid #f1f5f9',
+                          transition: 'background 0.15s ease',
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = '#f8fafc')}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = '#ffffff')}
+                      >
+                        {/* Name */}
+                        <td style={{ padding: '16px 20px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '15px' }}>
+                              {p.name}
+                            </div>
+                            {teamNum && (
+                              <span
+                                style={{
+                                  fontSize: '11px',
+                                  fontWeight: 800,
+                                  background: '#eef2ff',
+                                  color: '#4f46e5',
+                                  padding: '2px 8px',
+                                  borderRadius: '999px',
+                                  border: '1px solid #c7d2fe',
+                                }}
+                              >
+                                Team #{teamNum}
+                              </span>
+                            )}
+                          </div>
+                        </td>
+
+                        {/* Phone */}
+                        <td style={{ padding: '16px 20px' }}>
+                          <div style={{ fontFamily: 'monospace', color: '#4f46e5', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <Phone size={13} color="#94a3b8" />
+                            <span>{formatPhoneForDisplay(p.phone)}</span>
+                          </div>
+                        </td>
+
+                        {/* Status */}
+                        <td style={{ padding: '16px 20px' }}>
+                          <span
+                            className={`badge ${
+                              p.status === 'matched'
+                                ? 'badge-matched'
+                                : p.status === 'unmatched'
+                                ? 'badge-unmatched'
+                                : 'badge-waiting'
+                            }`}
+                          >
+                            {p.status}
+                          </span>
+                        </td>
+
+                        {/* Paired Partner */}
+                        <td style={{ padding: '16px 20px' }}>
+                          {p.status === 'matched' && partner ? (
+                            <div>
+                              <div style={{ fontWeight: 700, color: '#059669', fontSize: '14px' }}>
+                                {partner.name}
+                              </div>
+                              <div style={{ fontFamily: 'monospace', fontSize: '12px', color: '#64748b' }}>
+                                {formatPhoneForDisplay(partner.phone)}
+                              </div>
+                            </div>
+                          ) : p.status === 'unmatched' ? (
+                            <span style={{ fontSize: '13px', color: '#e11d48', fontWeight: 600 }}>
+                              Solo Reserve (Odd Count)
+                            </span>
+                          ) : (
+                            <span style={{ fontSize: '13px', color: 'var(--text-dim)' }}>
+                              Waiting for match run
+                            </span>
+                          )}
+                        </td>
+
+                        {/* Created At */}
+                        <td style={{ padding: '16px 20px', fontSize: '13px', color: 'var(--text-dim)' }}>
+                          {new Date(p.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

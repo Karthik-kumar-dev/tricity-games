@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { dbService } from '@/lib/supabaseAdmin';
 
 export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+export const fetchCache = 'force-no-store';
 
 export async function GET(request: NextRequest) {
   try {
@@ -25,11 +27,22 @@ export async function GET(request: NextRequest) {
 
     if (!participant) {
       // Record not found -> Admin might have cleared data!
-      return NextResponse.json({
-        success: true,
-        exists: false,
-        message: 'Participant record not found. Database may have been reset.',
-      });
+      return NextResponse.json(
+        {
+          success: true,
+          exists: false,
+          message: 'Participant record not found. Database may have been reset.',
+        },
+        {
+          headers: {
+            'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0',
+            'CDN-Cache-Control': 'no-store',
+            'Vercel-CDN-Cache-Control': 'no-store',
+            Pragma: 'no-cache',
+            Expires: '0',
+          },
+        }
+      );
     }
 
     return NextResponse.json(
@@ -41,11 +54,12 @@ export async function GET(request: NextRequest) {
       },
       {
         headers: {
-          // Allow edge CDN to cache for 1s, serve stale for 3s while revalidating
-          // This dramatically reduces origin hits when 1000+ students poll simultaneously
-          'Cache-Control': 'public, s-maxage=1, stale-while-revalidate=3',
-          'CDN-Cache-Control': 'public, s-maxage=1, stale-while-revalidate=3',
+          // Zero-caching for real-time responsiveness
+          'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0',
+          'CDN-Cache-Control': 'no-store',
+          'Vercel-CDN-Cache-Control': 'no-store',
           Pragma: 'no-cache',
+          Expires: '0',
         },
       }
     );

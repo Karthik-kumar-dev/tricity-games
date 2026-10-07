@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { revalidatePath } from 'next/cache';
-import { dbService } from '@/lib/supabaseAdmin';
+import { dbService, supabaseAdmin } from '@/lib/supabaseAdmin';
 import { verifyAdminSession } from '@/lib/adminAuth';
 
 export const dynamic = 'force-dynamic';
@@ -16,6 +16,19 @@ export async function POST(request: NextRequest) {
     }
 
     const result = await dbService.runMatching();
+
+    // Broadcast instant notification to all active students
+    if (supabaseAdmin) {
+      try {
+        await supabaseAdmin.channel('hackathon-broadcast').send({
+          type: 'broadcast',
+          event: 'matching_completed',
+          payload: { timestamp: Date.now() },
+        });
+      } catch (e) {
+        // Non-critical broadcast failure
+      }
+    }
 
     try {
       revalidatePath('/api/admin/participants');

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { revalidatePath } from 'next/cache';
-import { dbService } from '@/lib/supabaseAdmin';
+import { dbService, supabaseAdmin } from '@/lib/supabaseAdmin';
 import { verifyAdminSession } from '@/lib/adminAuth';
 
 export const dynamic = 'force-dynamic';
@@ -22,6 +22,19 @@ export async function POST(request: NextRequest) {
         { success: false, error: result.error || 'Failed to clear data' },
         { status: 500 }
       );
+    }
+
+    // Broadcast database wipe to all connected students to clear local sessions
+    if (supabaseAdmin) {
+      try {
+        await supabaseAdmin.channel('hackathon-broadcast').send({
+          type: 'broadcast',
+          event: 'database_cleared',
+          payload: { timestamp: Date.now() },
+        });
+      } catch (e) {
+        // Non-critical
+      }
     }
 
     // Force purge Next.js server and CDN caches immediately

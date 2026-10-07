@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { mockStore } from './mockStore';
 import { MatchResult, Participant } from './types';
@@ -35,14 +36,14 @@ if (isServerSupabaseConfigured) {
 
 export const supabaseAdmin = adminClient;
 
-// High-performance in-memory cache for status lookups (TTL: 2500ms)
-// Crucial for 1000+ concurrent students polling or checking status simultaneously
+// High-performance micro-cache for status lookups (TTL: 1000ms)
+// Absorbs 1000+ simultaneous requests in the same second without serving stale data
 interface CacheEntry {
   data: Participant | null;
   expiresAt: number;
 }
 const statusCache = new Map<string, CacheEntry>();
-const CACHE_TTL_MS = 30000;
+const CACHE_TTL_MS = 1000;
 
 // Single-Flight Request Coalescing (Critical for 1000+ simultaneous clicks)
 // If 1000 requests arrive at the same second, they all join a SINGLE in-flight promise
@@ -384,10 +385,10 @@ export const dbService = {
       return { success: true, total: 1, pairs: 0, unmatched: 1, message: 'Only 1 participant. Marked as unmatched.' };
     }
 
-    // Shuffle with Fisher-Yates
+    // Shuffle with cryptographically secure Fisher-Yates
     const shuffled = [...participants];
     for (let i = shuffled.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
+      const j = crypto.randomInt(0, i + 1);
       [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
     }
 

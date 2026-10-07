@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { revalidatePath } from 'next/cache';
-import { dbService } from '@/lib/supabaseAdmin';
+import { dbService, supabaseAdmin } from '@/lib/supabaseAdmin';
 import { verifyAdminSession } from '@/lib/adminAuth';
 
 export const dynamic = 'force-dynamic';
@@ -22,6 +22,19 @@ export async function POST(request: NextRequest) {
         { success: false, error: result.error || 'Failed to reset matches' },
         { status: 500 }
       );
+    }
+
+    // Broadcast reset event to all listening students
+    if (supabaseAdmin) {
+      try {
+        await supabaseAdmin.channel('hackathon-broadcast').send({
+          type: 'broadcast',
+          event: 'reset_completed',
+          payload: { timestamp: Date.now() },
+        });
+      } catch (e) {
+        // Non-critical
+      }
     }
 
     try {
