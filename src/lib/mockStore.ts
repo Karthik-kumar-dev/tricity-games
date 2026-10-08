@@ -1,17 +1,28 @@
-import { Participant, MatchResult } from './types';
+import { Participant, MatchResult, PassHolder } from './types';
+import { normalizePhone } from './validation';
 
 // In-memory global store for local development/fallback
 declare global {
   // eslint-disable-next-line no-var
   var __HACKATHON_MOCK_PARTICIPANTS__: Participant[] | undefined;
+  // eslint-disable-next-line no-var
+  var __HACKATHON_MOCK_PASS_HOLDERS__: PassHolder[] | undefined;
 }
 
 if (!globalThis.__HACKATHON_MOCK_PARTICIPANTS__) {
   globalThis.__HACKATHON_MOCK_PARTICIPANTS__ = [];
 }
 
+if (!globalThis.__HACKATHON_MOCK_PASS_HOLDERS__) {
+  globalThis.__HACKATHON_MOCK_PASS_HOLDERS__ = [];
+}
+
 const getStore = (): Participant[] => {
   return globalThis.__HACKATHON_MOCK_PARTICIPANTS__!;
+};
+
+const getPassHoldersStore = (): PassHolder[] => {
+  return globalThis.__HACKATHON_MOCK_PASS_HOLDERS__!;
 };
 
 export const mockStore = {
@@ -42,6 +53,8 @@ export const mockStore = {
     const store = getStore();
     const existing = store.find((item) => item.phone === phone);
     if (existing) {
+      // Upsert: update existing row instead of inserting a duplicate
+      existing.name = name.trim();
       return { participant: existing, isDuplicate: true };
     }
 
@@ -138,5 +151,80 @@ export const mockStore = {
     const count = store.length;
     globalThis.__HACKATHON_MOCK_PARTICIPANTS__ = [];
     return { count };
+  },
+
+  // ==========================================
+  // PASS HOLDERS MOCK OPERATIONS
+  // ==========================================
+
+  hasActivePass: (phone: string): boolean => {
+    const norm = normalizePhone(phone);
+    if (!norm) return false;
+    const store = getPassHoldersStore();
+    // Return true if ANY row for this normalized phone has activity_passes >= 1
+    return store.some(
+      (h) => h.phone_normalized === norm && Number(h.activity_passes) >= 1
+    );
+  },
+
+  getPassHolders: (searchQuery?: string): PassHolder[] => {
+    const store = getPassHoldersStore();
+    if (!searchQuery || !searchQuery.trim()) {
+      return [...store];
+    }
+    const q = searchQuery.toLowerCase().trim();
+    const qNorm = normalizePhone(q);
+    return store.filter((h) => {
+      const nameMatch = h.name.toLowerCase().includes(q);
+      const phoneMatch = h.phone.toLowerCase().includes(q) || (qNorm && h.phone_normalized.includes(qNorm));
+      return nameMatch || phoneMatch;
+    });
+  },
+
+  getPassHolderCounts: (): { total: number; active: number; noPass: number } => {
+    const store = getPassHoldersStore();
+    const total = store.length;
+    const active = store.filter((h) => Number(h.activity_passes) >= 1).length;
+    const noPass = total - active;
+    return { total, active, noPass };
+  },
+
+  upsertPassHolders: (records: PassHolder[]): { inserted: number; updated: number } => {
+    const store = getPassHoldersStore();
+    let inserted = 0;
+    let updated = 0;
+
+    for (const rec of records) {
+      const existingIdx = store.findIndex((h) => h.phone_normalized === rec.phone_normalized);
+      if (existingIdx >= 0) {
+        store[existingIdx] = {
+          ...store[existingIdx],
+          ...rec,
+          updated_at: new Date().toISOString(),
+        };
+        updated++;
+      } else {
+        store.push({
+          ...rec,
+          id: 'mock-pass-' + Math.random().toString(36).substring(2, 9),
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        });
+        inserted++;
+      }
+    }
+
+    return { inserted, updated };
+  },
+
+  replaceAllPassHolders: (records: PassHolder[]): { inserted: number } => {
+    const now = new Date().toISOString();
+    globalThis.__HACKATHON_MOCK_PASS_HOLDERS__ = records.map((rec) => ({
+      ...rec,
+      id: 'mock-pass-' + Math.random().toString(36).substring(2, 9),
+      created_at: now,
+      updated_at: now,
+    }));
+    return { inserted: records.length };
   },
 };

@@ -30,3 +30,39 @@ export interface ApiResponse<T = any> {
   error?: string;
   isMock?: boolean;
 }
+
+export interface PassHolder {
+  id?: string;
+  registration_id: string;
+  team_name?: string;
+  role?: string;
+  name: string;
+  email?: string;
+  phone: string;
+  phone_normalized: string;
+  branch?: string;
+  college?: string;
+  team_size?: number;
+  food_tokens?: number;
+  activity_passes: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface CsvSkippedRow {
+  row: number;
+  phone?: string;
+  reason: string;
+}
+
+export interface CsvUploadSummary {
+  totalRows: number;
+  processedRows: number;
+  inserted: number;
+  updated: number;
+  skipped: CsvSkippedRow[];
+  activePassesCount: number;
+  noPassCount: number;
+  totalHolders: number;
+}
+

@@ -2,7 +2,7 @@
 
 import { useState, useRef } from 'react';
 import { Sparkles, Phone, User, AlertCircle, ArrowRight, CheckCircle2 } from 'lucide-react';
-import { validateName, validatePhone, formatPhoneForDisplay } from '@/lib/validation';
+import { validateName, validatePhone, formatPhoneForDisplay, normalizePhone } from '@/lib/validation';
 import { Participant } from '@/lib/types';
 
 interface StudentFormProps {
@@ -54,7 +54,17 @@ export function StudentForm({ onRegistered }: StudentFormProps) {
         body: JSON.stringify({ name, phone }),
       });
 
-      const data = await res.json();
+      let data: any = {};
+      try {
+        data = await res.json();
+      } catch {
+        // Fallback for non-JSON responses
+      }
+
+      if (res.status === 404) {
+        setError('Service endpoint not found (404). If the dev server is running on port 3001, please visit http://localhost:3001.');
+        return;
+      }
 
       if (res.status === 409 && data.isDuplicate) {
         // Already registered! Retrieve status
@@ -211,10 +221,9 @@ export function StudentForm({ onRegistered }: StudentFormProps) {
               type="tel"
               placeholder="e.g. 9876543210 (10 digits)"
               value={phone}
-              maxLength={10}
+              maxLength={16}
               onChange={(e) => {
-                const val = e.target.value.replace(/\D/g, '');
-                setPhone(val);
+                setPhone(e.target.value);
                 if (error) setError(null);
               }}
               onBlur={() => setTouched((prev) => ({ ...prev, phone: true }))}
@@ -234,7 +243,7 @@ export function StudentForm({ onRegistered }: StudentFormProps) {
               </p>
             ) : (
               <p style={{ color: 'var(--text-dim)', fontSize: '12px' }}>
-                {phone.length === 10 ? '✓ 10 digits entered' : `${phone.length}/10 digits`}
+                {normalizePhone(phone).length === 10 ? '✓ 10-digit number' : `${normalizePhone(phone).length}/10 digits`}
               </p>
             )}
           </div>

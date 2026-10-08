@@ -209,7 +209,7 @@ export const dbService = {
     return dbService.getParticipantById(participant.id);
   },
 
-  // Register a new participant — uses atomic Postgres function to avoid race conditions
+  // Register or update participant — upserts by normalized phone
   registerParticipant: async (
     name: string,
     phone: string
@@ -219,52 +219,65 @@ export const dbService = {
       return { participant: result.participant, isDuplicate: result.isDuplicate };
     }
 
-    // Use atomic upsert function — handles race conditions even with 1000 concurrent inserts
-    const { data: rpcResult, error: rpcError } = await supabaseAdmin
-      .rpc('register_participant', { p_name: name.trim(), p_phone: phone.trim() });
+    try {
+      // Check if participant already exists with this phone
+      const { data: existing, error: findError } = await supabaseAdmin
+        .from('participants')
+        .select('*')
+        .eq('phone', phone.trim())
+        .maybeSingle();
 
-    if (!rpcError && rpcResult) {
-      const result = rpcResult as { participant: Participant; isDuplicate: boolean };
-      return {
-        participant: result.participant,
-        isDuplicate: result.isDuplicate,
-      };
-    }
-
-    // Fallback: direct insert with conflict handling (in case RPC isn't available)
-    if (rpcError) {
-      console.warn('RPC register_participant unavailable, falling back to direct insert:', rpcError.message);
-    }
-
-    const { data, error } = await supabaseAdmin
-      .from('participants')
-      .insert({
-        name: name.trim(),
-        phone: phone.trim(),
-        status: 'waiting',
-      })
-      .select()
-      .single();
-
-    if (error) {
-      if (error.code === '23505') {
-        // Postgres unique violation — phone already registered, fetch existing
-        const { data: existing } = await supabaseAdmin
-          .from('participants')
-          .select('*')
-          .eq('phone', phone.trim())
-          .maybeSingle();
-
-        return {
-          participant: existing as Participant | null,
-          isDuplicate: true,
-          error: 'This phone number is already registered.',
-        };
+      if (findError) {
+        console.error('Error checking existing participant by phone:', findError);
       }
-      return { participant: null, isDuplicate: false, error: error.message };
-    }
 
-    return { participant: data as Participant, isDuplicate: false };
+      if (existing) {
+        // If the phone already exists, update that row instead of inserting a duplicate
+        const { data: updated, error: updateError } = await supabaseAdmin
+          .from('participants')
+          .update({ name: name.trim() })
+          .eq('id', existing.id)
+          .select()
+          .single();
+
+        if (updateError) {
+          console.error('Error updating existing participant row:', updateError);
+          return { participant: existing as Participant, isDuplicate: true };
+        }
+
+        return { participant: (updated || existing) as Participant, isDuplicate: true };
+      }
+
+      // New participant: insert with status waiting
+      const { data: inserted, error: insertError } = await supabaseAdmin
+        .from('participants')
+        .insert({
+          name: name.trim(),
+          phone: phone.trim(),
+          status: 'waiting',
+        })
+        .select()
+        .single();
+
+      if (insertError) {
+        // Handle race conditions with unique constraint
+        if (insertError.code === '23505') {
+          const { data: current } = await supabaseAdmin
+            .from('participants')
+            .select('*')
+            .eq('phone', phone.trim())
+            .maybeSingle();
+
+          return { participant: current as Participant, isDuplicate: true };
+        }
+        return { participant: null, isDuplicate: false, error: insertError.message };
+      }
+
+      return { participant: inserted as Participant, isDuplicate: false };
+    } catch (err: any) {
+      console.error('registerParticipant error:', err);
+      return { participant: null, isDuplicate: false, error: err?.message || 'Database error' };
+    }
   },
 
   // Execute 1-to-1 matching — uses atomic Postgres function (single transaction)

@@ -1,32 +1,42 @@
 /**
- * Normalizes phone numbers to digits only.
+ * Normalizes phone numbers:
+ * 1. Remove all non-digits
+ * 2. Strip leading 91 or 0 country prefix
+ * 3. Keep last 10 digits
  */
 export function normalizePhone(rawPhone: string): string {
-  return (rawPhone || '').replace(/\D/g, '').trim();
+  if (!rawPhone) return '';
+  let digits = String(rawPhone).replace(/\D/g, '');
+
+  // Strip leading country code 91 if followed by 10 digits
+  if (digits.startsWith('91') && digits.length > 10) {
+    digits = digits.slice(2);
+  }
+  // Strip leading 0 prefix if longer than 10 digits
+  while (digits.startsWith('0') && digits.length > 10) {
+    digits = digits.slice(1);
+  }
+  // Keep last 10 digits
+  if (digits.length > 10) {
+    digits = digits.slice(-10);
+  }
+  return digits;
 }
 
 /**
- * Validates phone number strictly for 10 digits.
+ * Validates phone number strictly for 10 digits after normalization.
  */
 export function validatePhone(phone: string): { isValid: boolean; error?: string } {
   if (!phone || !phone.trim()) {
     return { isValid: false, error: 'Phone number is required.' };
   }
 
-  const digitsOnly = phone.replace(/\D/g, '');
+  const normalized = normalizePhone(phone);
 
-  if (digitsOnly.length !== 10) {
+  if (normalized.length !== 10) {
     return { 
       isValid: false, 
-      error: `Phone number must be exactly 10 digits (currently ${digitsOnly.length}).` 
-    };
-  }
-
-  // Ensure digits only
-  if (/[^\d\s\-]/.test(phone.trim())) {
-    return {
-      isValid: false,
-      error: 'Phone number must contain digits only.'
+      error: 'Enter a valid 10-digit phone number' 
     };
   }
 
