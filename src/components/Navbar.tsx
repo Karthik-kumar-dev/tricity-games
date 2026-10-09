@@ -2,13 +2,14 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Sparkles, Users } from 'lucide-react';
+import { Sparkles, Users, ShieldAlert } from 'lucide-react';
 
 interface NavbarProps {
   isLive?: boolean;
+  onOpenReport?: () => void;
 }
 
-export function Navbar({ isLive }: NavbarProps) {
+export function Navbar({ isLive, onOpenReport }: NavbarProps) {
   const pathname = usePathname();
   const isAdmin = pathname.startsWith('/admin');
 
@@ -87,6 +88,33 @@ export function Navbar({ isLive }: NavbarProps) {
         </Link>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          {/* Report Button on Student Portal */}
+          {!isAdmin && onOpenReport && (
+            <button
+              id="navbar-report-btn"
+              type="button"
+              onClick={onOpenReport}
+              style={{
+                padding: '7px 14px',
+                fontSize: '13px',
+                fontWeight: 700,
+                color: '#e11d48',
+                background: '#fff1f2',
+                border: '1px solid #fecdd3',
+                borderRadius: '999px',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                transition: 'all 0.15s ease',
+              }}
+              title="Report an issue or phone number"
+            >
+              <ShieldAlert size={14} />
+              <span>Report</span>
+            </button>
+          )}
+
           {/* Navigation Switch */}
           {isAdmin && (
             <Link

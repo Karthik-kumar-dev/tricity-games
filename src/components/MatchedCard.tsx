@@ -9,6 +9,7 @@ import {
   Check,
   PhoneCall,
   RefreshCw,
+  Flag,
 } from 'lucide-react';
 import { Participant } from '@/lib/types';
 import { formatPhoneForDisplay } from '@/lib/validation';
@@ -18,9 +19,10 @@ interface MatchedCardProps {
   participant: Participant;
   isPolling?: boolean;
   onManualRefresh?: () => void;
+  onOpenReport?: (phone: string, name?: string) => void;
 }
 
-export function MatchedCard({ participant, isPolling = false, onManualRefresh }: MatchedCardProps) {
+export function MatchedCard({ participant, isPolling = false, onManualRefresh, onOpenReport }: MatchedCardProps) {
   const [copied, setCopied] = useState(false);
   const [cooldown, setCooldown] = useState(0);
   const partner = participant.partner;
@@ -222,6 +224,44 @@ export function MatchedCard({ participant, isPolling = false, onManualRefresh }:
             <span>{copied ? 'Copied!' : 'Copy Phone'}</span>
           </button>
         </div>
+
+        {/* Report Partner Action */}
+        {onOpenReport && (
+          <button
+            id="matched-report-partner-btn"
+            type="button"
+            onClick={() => onOpenReport(partnerPhoneRaw, partner?.name)}
+            style={{
+              width: '100%',
+              marginTop: '12px',
+              background: '#fff1f2',
+              border: '1px solid #fecdd3',
+              borderRadius: 'var(--radius-md)',
+              color: '#e11d48',
+              fontSize: '12.5px',
+              fontWeight: 700,
+              padding: '9px 14px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '6px',
+              transition: 'all 0.15s ease',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = '#ffe4e6';
+              e.currentTarget.style.borderColor = '#fca5a5';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = '#fff1f2';
+              e.currentTarget.style.borderColor = '#fecdd3';
+            }}
+            title="Report partner if unreachable, absent, or issue occurs"
+          >
+            <Flag size={13} />
+            <span>Report Partner / Issue With Number</span>
+          </button>
+        )}
       </div>
 
       {/* Your Info Confirmation */}

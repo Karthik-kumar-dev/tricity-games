@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { RefreshCw, User, Phone, LogOut } from 'lucide-react';
+import { RefreshCw, User, Phone, LogOut, ShieldAlert } from 'lucide-react';
 import { Participant } from '@/lib/types';
 import { formatPhoneForDisplay } from '@/lib/validation';
 import { CuteMatchAnimation } from './CuteMatchAnimation';
@@ -11,6 +11,7 @@ interface WaitingCardProps {
   isPolling?: boolean;
   onManualRefresh?: () => void;
   onResetSession?: () => void;
+  onOpenReport?: () => void;
 }
 
 export function WaitingCard({
@@ -18,6 +19,7 @@ export function WaitingCard({
   isPolling = false,
   onManualRefresh,
   onResetSession,
+  onOpenReport,
 }: WaitingCardProps) {
   const [cooldown, setCooldown] = useState(0);
 
@@ -179,6 +181,32 @@ export function WaitingCard({
           </button>
         )}
       </div>
+
+      {onOpenReport && (
+        <div style={{ marginTop: '16px', paddingTop: '14px', borderTop: '1px solid #f1f5f9' }}>
+          <button
+            type="button"
+            onClick={onOpenReport}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: '#94a3b8',
+              fontSize: '12px',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '5px',
+              padding: '4px 8px',
+              transition: 'color 0.15s ease',
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.color = '#e11d48')}
+            onMouseLeave={(e) => (e.currentTarget.style.color = '#94a3b8')}
+          >
+            <ShieldAlert size={13} />
+            <span>Facing an issue? Report a phone number</span>
+          </button>
+        </div>
+      )}
     </div>
   );
 }

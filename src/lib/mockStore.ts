@@ -1,4 +1,4 @@
-import { Participant, MatchResult, PassHolder } from './types';
+import { Participant, MatchResult, PassHolder, Report } from './types';
 import { normalizePhone } from './validation';
 
 // In-memory global store for local development/fallback
@@ -7,6 +7,8 @@ declare global {
   var __HACKATHON_MOCK_PARTICIPANTS__: Participant[] | undefined;
   // eslint-disable-next-line no-var
   var __HACKATHON_MOCK_PASS_HOLDERS__: PassHolder[] | undefined;
+  // eslint-disable-next-line no-var
+  var __HACKATHON_MOCK_REPORTS__: Report[] | undefined;
 }
 
 if (!globalThis.__HACKATHON_MOCK_PARTICIPANTS__) {
@@ -17,12 +19,20 @@ if (!globalThis.__HACKATHON_MOCK_PASS_HOLDERS__) {
   globalThis.__HACKATHON_MOCK_PASS_HOLDERS__ = [];
 }
 
+if (!globalThis.__HACKATHON_MOCK_REPORTS__) {
+  globalThis.__HACKATHON_MOCK_REPORTS__ = [];
+}
+
 const getStore = (): Participant[] => {
   return globalThis.__HACKATHON_MOCK_PARTICIPANTS__!;
 };
 
 const getPassHoldersStore = (): PassHolder[] => {
   return globalThis.__HACKATHON_MOCK_PASS_HOLDERS__!;
+};
+
+const getReportsStore = (): Report[] => {
+  return globalThis.__HACKATHON_MOCK_REPORTS__!;
 };
 
 export const mockStore = {
@@ -226,5 +236,115 @@ export const mockStore = {
       updated_at: now,
     }));
     return { inserted: records.length };
+  },
+
+  addPassHolder: (data: Partial<PassHolder> & { name: string; phone: string }): { passHolder: PassHolder; isUpdated: boolean } => {
+    const norm = normalizePhone(data.phone);
+    const store = getPassHoldersStore();
+    const existingIdx = store.findIndex((h) => h.phone_normalized === norm);
+    const now = new Date().toISOString();
+
+    const record: PassHolder = {
+      id: existingIdx >= 0 ? store[existingIdx].id : 'mock-pass-' + Math.random().toString(36).substring(2, 9),
+      registration_id: data.registration_id?.trim() || `REG-${Math.floor(1000 + Math.random() * 9000)}`,
+      team_name: data.team_name?.trim() || '',
+      role: data.role?.trim() || 'Participant',
+      name: data.name.trim(),
+      email: data.email?.trim() || '',
+      phone: data.phone.trim(),
+      phone_normalized: norm,
+      branch: data.branch?.trim() || '',
+      college: data.college?.trim() || '',
+      team_size: typeof data.team_size === 'number' && data.team_size > 0 ? data.team_size : 1,
+      food_tokens: typeof data.food_tokens === 'number' && data.food_tokens >= 0 ? data.food_tokens : 0,
+      activity_passes: typeof data.activity_passes === 'number' && data.activity_passes >= 0 ? data.activity_passes : 1,
+      created_at: existingIdx >= 0 ? store[existingIdx].created_at : now,
+      updated_at: now,
+    };
+
+    if (existingIdx >= 0) {
+      store[existingIdx] = record;
+      return { passHolder: record, isUpdated: true };
+    } else {
+      store.push(record);
+      return { passHolder: record, isUpdated: false };
+    }
+  },
+
+  deletePassHolder: (identifier: { id?: string; phone?: string }): { success: boolean; deletedCount: number } => {
+    const store = getPassHoldersStore();
+    const initialLen = store.length;
+    const norm = identifier.phone ? normalizePhone(identifier.phone) : '';
+    const filtered = store.filter((h) => {
+      if (identifier.id && h.id === identifier.id) return false;
+      if (norm && h.phone_normalized === norm) return false;
+      return true;
+    });
+    globalThis.__HACKATHON_MOCK_PASS_HOLDERS__ = filtered;
+    return { success: true, deletedCount: initialLen - filtered.length };
+  },
+
+  // ==========================================
+  // REPORTS MOCK OPERATIONS
+  // ==========================================
+
+  addReport: (data: {
+    reported_phone: string;
+    category: string;
+    details?: string;
+    reporter_name?: string;
+    reporter_phone?: string;
+  }): Report => {
+    const store = getReportsStore();
+    const norm = normalizePhone(data.reported_phone);
+    const newReport: Report = {
+      id: 'mock-rep-' + Math.random().toString(36).substring(2, 9),
+      reported_phone: data.reported_phone.trim(),
+      reported_phone_normalized: norm,
+      reporter_name: data.reporter_name?.trim() || 'Anonymous Student',
+      reporter_phone: data.reporter_phone ? normalizePhone(data.reporter_phone) : '',
+      category: data.category.trim(),
+      details: data.details?.trim() || '',
+      status: 'pending',
+      created_at: new Date().toISOString(),
+      resolved_at: null,
+    };
+    store.unshift(newReport);
+    return newReport;
+  },
+
+  getReports: (searchQuery?: string): Report[] => {
+    const store = getReportsStore();
+    if (!searchQuery || !searchQuery.trim()) {
+      return [...store];
+    }
+    const q = searchQuery.toLowerCase().trim();
+    return store.filter(
+      (r) =>
+        r.reported_phone.includes(q) ||
+        r.reported_phone_normalized.includes(q) ||
+        (r.reporter_name || '').toLowerCase().includes(q) ||
+        r.category.toLowerCase().includes(q) ||
+        (r.details || '').toLowerCase().includes(q)
+    );
+  },
+
+  updateReportStatus: (id: string, status: Report['status']): boolean => {
+    const store = getReportsStore();
+    const item = store.find((r) => r.id === id);
+    if (!item) return false;
+    item.status = status;
+    if (status === 'resolved' || status === 'dismissed') {
+      item.resolved_at = new Date().toISOString();
+    }
+    return true;
+  },
+
+  deleteReport: (id: string): boolean => {
+    const store = getReportsStore();
+    const initialLen = store.length;
+    const filtered = store.filter((r) => r.id !== id);
+    globalThis.__HACKATHON_MOCK_REPORTS__ = filtered;
+    return filtered.length < initialLen;
   },
 };

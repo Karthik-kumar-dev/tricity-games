@@ -66,3 +66,19 @@ export interface CsvUploadSummary {
   totalHolders: number;
 }
 
+export type ReportStatus = 'pending' | 'investigating' | 'resolved' | 'dismissed';
+
+export interface Report {
+  id: string;
+  reported_phone: string;
+  reported_phone_normalized: string;
+  reporter_name?: string;
+  reporter_phone?: string;
+  category: string;
+  details?: string;
+  status: ReportStatus;
+  created_at: string;
+  resolved_at?: string | null;
+}
+
+

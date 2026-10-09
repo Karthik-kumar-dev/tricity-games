@@ -450,3 +450,128 @@ export async function fetchAllPassHolders(
     return { passHolders: [], counts };
   }
 }
+
+/**
+ * Adds or updates a single pass holder record in pass_holders table.
+ */
+export async function addPassHolder(data: {
+  registration_id?: string;
+  team_name?: string;
+  role?: string;
+  name: string;
+  email?: string;
+  phone: string;
+  branch?: string;
+  college?: string;
+  team_size?: number;
+  food_tokens?: number;
+  activity_passes?: number;
+}): Promise<{ passHolder: PassHolder; isUpdated: boolean }> {
+  const trimmedName = (data.name || '').trim();
+  if (!trimmedName) {
+    throw new Error('Student name is required.');
+  }
+
+  const rawPhone = (data.phone || '').trim();
+  const normalized = normalizePhone(rawPhone);
+  if (!normalized || normalized.length !== 10) {
+    throw new Error('Please enter a valid 10-digit phone number.');
+  }
+
+  const teamSize = typeof data.team_size === 'number' && data.team_size > 0 ? data.team_size : 1;
+  const foodTokens = typeof data.food_tokens === 'number' && data.food_tokens >= 0 ? data.food_tokens : 0;
+  const activityPasses =
+    typeof data.activity_passes === 'number' && data.activity_passes >= 0
+      ? data.activity_passes
+      : 1;
+  const regId = data.registration_id?.trim() || `REG-${Math.floor(1000 + Math.random() * 9000)}`;
+
+  if (!isServerSupabaseConfigured || !supabaseAdmin) {
+    return mockStore.addPassHolder({
+      ...data,
+      name: trimmedName,
+      registration_id: regId,
+      team_size: teamSize,
+      food_tokens: foodTokens,
+      activity_passes: activityPasses,
+    });
+  }
+
+  // Check if student exists in Supabase
+  const { data: existing, error: checkErr } = await supabaseAdmin
+    .from('pass_holders')
+    .select('id')
+    .eq('phone_normalized', normalized)
+    .maybeSingle();
+
+  if (checkErr) {
+    console.warn('Error checking existing pass holder:', checkErr.message);
+  }
+
+  const isUpdated = Boolean(existing);
+  const now = new Date().toISOString();
+
+  const payload: any = {
+    registration_id: regId,
+    team_name: data.team_name?.trim() || null,
+    role: data.role?.trim() || 'Participant',
+    name: trimmedName,
+    email: data.email?.trim() || null,
+    phone: rawPhone,
+    phone_normalized: normalized,
+    branch: data.branch?.trim() || null,
+    college: data.college?.trim() || null,
+    team_size: teamSize,
+    food_tokens: foodTokens,
+    activity_passes: activityPasses,
+    updated_at: now,
+  };
+
+  const { data: saved, error: upsertErr } = await supabaseAdmin
+    .from('pass_holders')
+    .upsert(payload, { onConflict: 'phone_normalized' })
+    .select('*')
+    .single();
+
+  if (upsertErr) {
+    console.error('Error saving pass holder in Supabase:', upsertErr);
+    throw new Error(`Failed to save pass holder: ${upsertErr.message}`);
+  }
+
+  return {
+    passHolder: saved as PassHolder,
+    isUpdated,
+  };
+}
+
+/**
+ * Deletes a pass holder by ID or phone.
+ */
+export async function deletePassHolder(identifier: {
+  id?: string;
+  phone?: string;
+}): Promise<{ deletedCount: number }> {
+  if (!isServerSupabaseConfigured || !supabaseAdmin) {
+    const res = mockStore.deletePassHolder(identifier);
+    return { deletedCount: res.deletedCount };
+  }
+
+  let query = supabaseAdmin.from('pass_holders').delete();
+  if (identifier.id) {
+    query = query.eq('id', identifier.id);
+  } else if (identifier.phone) {
+    const norm = normalizePhone(identifier.phone);
+    query = query.eq('phone_normalized', norm);
+  } else {
+    throw new Error('Pass holder ID or phone is required to delete record.');
+  }
+
+  const { error, count } = await query;
+  if (error) {
+    console.error('Error deleting pass holder:', error);
+    throw new Error(`Failed to delete pass holder: ${error.message}`);
+  }
+
+  return { deletedCount: count ?? 1 };
+}
+

@@ -290,4 +290,37 @@ $$;
 
 GRANT EXECUTE ON FUNCTION public.replace_all_pass_holders(jsonb) TO anon, authenticated, service_role;
 
+-- ==============================================================================
+-- REPORTS TABLE — For reporting phone numbers on student portal
+-- ==============================================================================
+CREATE TABLE IF NOT EXISTS public.reports (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    reported_phone TEXT NOT NULL,
+    reported_phone_normalized TEXT NOT NULL,
+    reporter_name TEXT,
+    reporter_phone TEXT,
+    category TEXT NOT NULL,
+    details TEXT,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'investigating', 'resolved', 'dismissed')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+    resolved_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_reports_reported_phone ON public.reports(reported_phone_normalized);
+CREATE INDEX IF NOT EXISTS idx_reports_status ON public.reports(status);
+
+ALTER TABLE public.reports ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Public can submit reports" ON public.reports;
+CREATE POLICY "Public can submit reports"
+    ON public.reports FOR INSERT
+    WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Admin and service role access on reports" ON public.reports;
+CREATE POLICY "Admin and service role access on reports"
+    ON public.reports FOR ALL
+    USING (true)
+    WITH CHECK (true);
+
+
 

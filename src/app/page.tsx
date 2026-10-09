@@ -6,6 +6,8 @@ import { StudentForm } from '@/components/StudentForm';
 import { WaitingCard } from '@/components/WaitingCard';
 import { MatchedCard } from '@/components/MatchedCard';
 import { UnmatchedCard } from '@/components/UnmatchedCard';
+import { ReportModal } from '@/components/ReportModal';
+import { CheckCircle2 } from 'lucide-react';
 import { Participant } from '@/lib/types';
 import { supabase, isSupabaseConfigured } from '@/lib/supabaseClient';
 
@@ -32,12 +34,23 @@ export default function StudentPage() {
   const [loadingInitial, setLoadingInitial] = useState(true);
   const [isPolling, setIsPolling] = useState(false);
   const [isLiveDb, setIsLiveDb] = useState(false);
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [reportTargetPhone, setReportTargetPhone] = useState('');
+  const [reportTargetName, setReportTargetName] = useState('');
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
   const participantRef = useRef<Participant | null>(null);
   const inflightRef = useRef(false);
   const pollIntervalRef = useRef<number>(3000); // Start at 3s
   const realtimeActiveRef = useRef(false);
 
   participantRef.current = participant;
+
+  const handleOpenReport = (phone?: string, name?: string) => {
+    setReportTargetPhone(phone || '');
+    setReportTargetName(name || '');
+    setShowReportModal(true);
+  };
 
   // Fetch latest status by ID or phone — with deduplication
   const checkStatus = useCallback(async (id?: string, phone?: string) => {
@@ -301,8 +314,51 @@ export default function StudentPage() {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
-      <Navbar isLive={isLiveDb || isSupabaseConfigured} />
+    <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', position: 'relative' }}>
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div
+          style={{
+            position: 'fixed',
+            top: '20px',
+            right: '20px',
+            zIndex: 1000,
+            background: '#059669',
+            color: '#ffffff',
+            padding: '12px 20px',
+            borderRadius: 'var(--radius-md)',
+            boxShadow: '0 10px 30px rgba(0, 0, 0, 0.2)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px',
+            fontWeight: 700,
+            fontSize: '13.5px',
+          }}
+          className="animate-pop-in"
+        >
+          <CheckCircle2 size={18} />
+          <span>{toastMessage}</span>
+        </div>
+      )}
+
+      {/* Report Modal */}
+      <ReportModal
+        isOpen={showReportModal}
+        onClose={() => setShowReportModal(false)}
+        defaultPhone={reportTargetPhone}
+        defaultName={reportTargetName}
+        reporterName={participant?.name}
+        reporterPhone={participant?.phone}
+        onSuccess={(msg) => {
+          setToastMessage(msg);
+          setTimeout(() => setToastMessage(null), 4500);
+        }}
+      />
+
+      <Navbar
+        isLive={isLiveDb || isSupabaseConfigured}
+        onOpenReport={() => handleOpenReport()}
+      />
 
       <main
         style={{
@@ -337,12 +393,14 @@ export default function StudentPage() {
             participant={participant}
             isPolling={isPolling}
             onManualRefresh={() => checkStatus(participant.id, participant.phone)}
+            onOpenReport={handleOpenReport}
           />
         ) : participant.status === 'unmatched' ? (
           <UnmatchedCard
             participant={participant}
             isPolling={isPolling}
             onManualRefresh={() => checkStatus(participant.id, participant.phone)}
+            onOpenReport={() => handleOpenReport()}
           />
         ) : (
           <WaitingCard
@@ -350,6 +408,7 @@ export default function StudentPage() {
             isPolling={isPolling}
             onManualRefresh={() => checkStatus(participant.id, participant.phone)}
             onResetSession={handleResetSession}
+            onOpenReport={() => handleOpenReport()}
           />
         )}
       </main>
@@ -358,14 +417,36 @@ export default function StudentPage() {
       <footer
         style={{
           borderTop: '1px solid #e2e8f0',
-          padding: '20px',
+          padding: '18px 20px',
           textAlign: 'center',
           fontSize: '13px',
           color: '#64748b',
           background: '#ffffff',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexWrap: 'wrap',
+          gap: '16px',
         }}
       >
-        Hackathon Matching System
+        <span>Hackathon Matching System • Tri-City Games</span>
+        <button
+          id="footer-report-btn"
+          type="button"
+          onClick={() => handleOpenReport()}
+          style={{
+            background: 'none',
+            border: 'none',
+            color: '#e11d48',
+            fontSize: '12.5px',
+            fontWeight: 600,
+            cursor: 'pointer',
+            padding: '2px 8px',
+            textDecoration: 'underline',
+          }}
+        >
+          Report a Phone Number
+        </button>
       </footer>
     </div>
   );

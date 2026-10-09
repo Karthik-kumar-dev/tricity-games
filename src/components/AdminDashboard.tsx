@@ -25,10 +25,18 @@ import {
   ChevronDown,
   ChevronUp,
   AlertTriangle,
+  UserPlus,
+  ShieldAlert,
+  Check,
+  Flag,
+  XCircle,
+  Eye,
 } from 'lucide-react';
-import { Participant, PassHolder, CsvUploadSummary } from '@/lib/types';
+import { Participant, PassHolder, CsvUploadSummary, Report, ReportStatus } from '@/lib/types';
 import { ConfirmModal } from './ConfirmModal';
-import { formatPhoneForDisplay } from '@/lib/validation';
+import { AddStudentModal } from './AddStudentModal';
+import { ReportDetailsModal } from './ReportDetailsModal';
+import { formatPhoneForDisplay, normalizePhone } from '@/lib/validation';
 import { supabase, isSupabaseConfigured } from '@/lib/supabaseClient';
 
 interface AdminDashboardProps {
@@ -44,9 +52,11 @@ export function AdminDashboard({ token, onLogout }: AdminDashboardProps) {
   const [resetting, setResetting] = useState(false);
   const [showClearModal, setShowClearModal] = useState(false);
   const [showResetModal, setShowResetModal] = useState(false);
+  const [showAddStudentModal, setShowAddStudentModal] = useState(false);
+  const [deletingPassHolderId, setDeletingPassHolderId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterStatus, setFilterStatus] = useState<'all' | 'waiting' | 'matched' | 'unmatched'>('all');
-  const [viewMode, setViewMode] = useState<'table' | 'teams' | 'passes'>('table');
+  const [viewMode, setViewMode] = useState<'table' | 'teams' | 'passes' | 'reports'>('table');
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
 
   // Pass Holders State
@@ -66,9 +76,53 @@ export function AdminDashboard({ token, onLogout }: AdminDashboardProps) {
   const [passFilterStatus, setPassFilterStatus] = useState<'all' | 'active' | 'nopass'>('all');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Reports State
+  const [reports, setReports] = useState<Report[]>([]);
+  const [reportCounts, setReportCounts] = useState<{ total: number; pending: number; resolved: number }>({
+    total: 0,
+    pending: 0,
+    resolved: 0,
+  });
+  const [loadingReports, setLoadingReports] = useState(false);
+  const [reportSearchQuery, setReportSearchQuery] = useState('');
+  const [reportFilterStatus, setReportFilterStatus] = useState<'all' | 'pending' | 'investigating' | 'resolved' | 'dismissed'>('all');
+  const [selectedReportForDetails, setSelectedReportForDetails] = useState<Report | null>(null);
+
   const showToast = (text: string, type: 'success' | 'error' | 'info' = 'success') => {
     setToastMessage({ text, type });
     setTimeout(() => setToastMessage(null), 4000);
+  };
+
+  const handleDeletePassHolder = async (holder: PassHolder) => {
+    if (!window.confirm(`Are you sure you want to delete ${holder.name} (${holder.phone_normalized}) from pass holders?`)) {
+      return;
+    }
+    const idOrPhone = holder.id || holder.phone_normalized;
+    setDeletingPassHolderId(idOrPhone);
+    try {
+      const url = holder.id
+        ? `/api/admin/pass-holders?id=${encodeURIComponent(holder.id)}`
+        : `/api/admin/pass-holders?phone=${encodeURIComponent(holder.phone_normalized)}`;
+
+      const res = await fetch(url, {
+        method: 'DELETE',
+        headers: {
+          'x-admin-token': token,
+        },
+      });
+
+      const data = await res.json();
+      if (res.ok && data.success) {
+        showToast(data.message || `Deleted ${holder.name} from pass holders.`, 'success');
+        await fetchPassHolders(true);
+      } else {
+        showToast(data.error || 'Failed to delete student.', 'error');
+      }
+    } catch (err: any) {
+      showToast(err?.message || 'Network error deleting student.', 'error');
+    } finally {
+      setDeletingPassHolderId(null);
+    }
   };
 
   // Fetch participants with admin authorization
@@ -185,11 +239,101 @@ export function AdminDashboard({ token, onLogout }: AdminDashboardProps) {
     }
   };
 
+  // Fetch student reports and counts
+  const fetchReports = useCallback(async (silent = false) => {
+    if (!silent) setLoadingReports(true);
+    try {
+      const res = await fetch(`/api/admin/reports?_t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: {
+          'x-admin-token': token,
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+        },
+      });
+
+      if (res.status === 401) {
+        onLogout();
+        return;
+      }
+
+      const data = await res.json();
+      if (data.success) {
+        setReports(data.reports || []);
+        if (data.counts) {
+          setReportCounts(data.counts);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load reports:', err);
+    } finally {
+      if (!silent) setLoadingReports(false);
+    }
+  }, [token, onLogout]);
+
+  const handleUpdateReportStatus = async (reportId: string, status: ReportStatus) => {
+    try {
+      const res = await fetch('/api/admin/reports', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-token': token,
+        },
+        body: JSON.stringify({ id: reportId, status }),
+      });
+
+      if (res.status === 401) {
+        onLogout();
+        return;
+      }
+
+      const data = await res.json();
+      if (res.ok && data.success) {
+        showToast(`Report marked as "${status}".`, 'success');
+        await fetchReports(true);
+      } else {
+        showToast(data.error || 'Failed to update report status.', 'error');
+      }
+    } catch (err: any) {
+      showToast(err?.message || 'Network error updating report.', 'error');
+    }
+  };
+
+  const handleDeleteReport = async (report: Report) => {
+    if (!window.confirm(`Are you sure you want to delete report for ${report.reported_phone}?`)) {
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/admin/reports?id=${encodeURIComponent(report.id)}`, {
+        method: 'DELETE',
+        headers: {
+          'x-admin-token': token,
+        },
+      });
+
+      if (res.status === 401) {
+        onLogout();
+        return;
+      }
+
+      const data = await res.json();
+      if (res.ok && data.success) {
+        showToast('Report deleted successfully.', 'success');
+        await fetchReports(true);
+      } else {
+        showToast(data.error || 'Failed to delete report.', 'error');
+      }
+    } catch (err: any) {
+      showToast(err?.message || 'Network error deleting report.', 'error');
+    }
+  };
+
   // Initial load
   useEffect(() => {
     fetchParticipants();
     fetchPassHolders();
-  }, [fetchParticipants, fetchPassHolders]);
+    fetchReports();
+  }, [fetchParticipants, fetchPassHolders, fetchReports]);
 
   // Real-time channel or polling
   useEffect(() => {
@@ -377,6 +521,60 @@ export function AdminDashboard({ token, onLogout }: AdminDashboardProps) {
     return map;
   }, [matchedPairs]);
 
+  // Map participant phone to Participant
+  const participantByPhoneMap = useMemo(() => {
+    const map = new Map<string, Participant>();
+    participants.forEach((p) => {
+      const norm = normalizePhone(p.phone);
+      if (norm) map.set(norm, p);
+      map.set(p.phone, p);
+    });
+    return map;
+  }, [participants]);
+
+  // Map pass holder phone to PassHolder
+  const passHolderByPhoneMap = useMemo(() => {
+    const map = new Map<string, PassHolder>();
+    passHolders.forEach((h) => {
+      if (h.phone_normalized) map.set(h.phone_normalized, h);
+      if (h.phone) map.set(h.phone, h);
+    });
+    return map;
+  }, [passHolders]);
+
+  // Map phone to reports list for flagging across tables
+  const reportsByPhoneMap = useMemo(() => {
+    const map = new Map<string, Report[]>();
+    reports.forEach((r) => {
+      const p = r.reported_phone_normalized || normalizePhone(r.reported_phone);
+      if (p) {
+        const existing = map.get(p) || [];
+        existing.push(r);
+        map.set(p, existing);
+      }
+    });
+    return map;
+  }, [reports]);
+
+  // Helper to retrieve all student details for a given phone
+  const getStudentMatchDetails = useCallback((phone: string | undefined | null) => {
+    if (!phone) return null;
+    const norm = normalizePhone(phone);
+    const participant = (norm ? participantByPhoneMap.get(norm) : null) || participantByPhoneMap.get(phone);
+    const passHolder = (norm ? passHolderByPhoneMap.get(norm) : null) || passHolderByPhoneMap.get(phone);
+    const partner = participant?.matched_with_id ? participantMap.get(participant.matched_with_id) : null;
+    return { participant, passHolder, partner };
+  }, [participantByPhoneMap, passHolderByPhoneMap, participantMap]);
+
+  // Selected report full dossier details
+  const selectedReportDossier = useMemo(() => {
+    if (!selectedReportForDetails) return null;
+    return {
+      reported: getStudentMatchDetails(selectedReportForDetails.reported_phone_normalized || selectedReportForDetails.reported_phone),
+      reporter: getStudentMatchDetails(selectedReportForDetails.reporter_phone),
+    };
+  }, [selectedReportForDetails, getStudentMatchDetails]);
+
   // Filtered & Searched list for Table view
   const filteredList = useMemo(() => {
     return participants.filter((p) => {
@@ -435,6 +633,28 @@ export function AdminDashboard({ token, onLogout }: AdminDashboardProps) {
       return true;
     });
   }, [passHolders, passFilterStatus, passSearchQuery]);
+
+  // Filtered & Searched Reports
+  const filteredReports = useMemo(() => {
+    return reports.filter((r) => {
+      if (reportFilterStatus !== 'all' && r.status !== reportFilterStatus) return false;
+
+      if (reportSearchQuery.trim()) {
+        const q = reportSearchQuery.toLowerCase();
+        const matchesPhone =
+          (r.reported_phone || '').toLowerCase().includes(q) ||
+          (r.reported_phone_normalized || '').toLowerCase().includes(q);
+        const matchesReporter =
+          (r.reporter_name || '').toLowerCase().includes(q) ||
+          (r.reporter_phone || '').toLowerCase().includes(q);
+        const matchesCategory = (r.category || '').toLowerCase().includes(q);
+        const matchesDetails = (r.details || '').toLowerCase().includes(q);
+        return matchesPhone || matchesReporter || matchesCategory || matchesDetails;
+      }
+
+      return true;
+    });
+  }, [reports, reportFilterStatus, reportSearchQuery]);
 
   return (
     <div style={{ maxWidth: '1200px', width: '100%', margin: '0 auto', padding: '32px 20px' }}>
@@ -495,6 +715,32 @@ export function AdminDashboard({ token, onLogout }: AdminDashboardProps) {
         onCancel={() => setShowResetModal(false)}
       />
 
+      {/* Add Student to Pass Holders Modal */}
+      <AddStudentModal
+        isOpen={showAddStudentModal}
+        onClose={() => setShowAddStudentModal(false)}
+        token={token}
+        onSuccess={(_student, message) => {
+          showToast(message, 'success');
+          fetchPassHolders(true);
+          fetchParticipants(true);
+        }}
+      />
+
+      {/* Report Full Dossier Details Modal */}
+      <ReportDetailsModal
+        isOpen={Boolean(selectedReportForDetails)}
+        onClose={() => setSelectedReportForDetails(null)}
+        report={selectedReportForDetails}
+        reportedDetails={selectedReportDossier?.reported ?? null}
+        reporterDetails={selectedReportDossier?.reporter ?? null}
+        onUpdateStatus={handleUpdateReportStatus}
+        onDeleteReport={async (rep) => {
+          await handleDeleteReport(rep);
+          setSelectedReportForDetails(null);
+        }}
+      />
+
       {/* Admin Top Header */}
       <div
         style={{
@@ -531,13 +777,14 @@ export function AdminDashboard({ token, onLogout }: AdminDashboardProps) {
             onClick={() => {
               fetchParticipants();
               fetchPassHolders();
+              fetchReports();
             }}
             className="btn-secondary"
             style={{ padding: '10px 16px' }}
-            disabled={loading || loadingPasses}
-            title="Refresh participant and pass holder lists"
+            disabled={loading || loadingPasses || loadingReports}
+            title="Refresh participant, pass holder, and report lists"
           >
-            <RefreshCw size={15} className={loading || loadingPasses ? 'animate-spin' : ''} />
+            <RefreshCw size={15} className={loading || loadingPasses || loadingReports ? 'animate-spin' : ''} />
             <span>Refresh</span>
           </button>
 
@@ -630,7 +877,83 @@ export function AdminDashboard({ token, onLogout }: AdminDashboardProps) {
             {totalCount % 2 !== 0 ? 'Odd pool: 1 unmatched' : 'Even pool: 0 leftovers'}
           </div>
         </div>
+
+        {/* Reported Incidents Metric Card */}
+        <div
+          className="glass-panel"
+          style={{
+            padding: '20px 24px',
+            background: reportCounts.pending > 0 ? '#fff1f2' : '#ffffff',
+            border: reportCounts.pending > 0 ? '1.5px solid #fecdd3' : '1px solid #e2e8f0',
+            cursor: 'pointer',
+            transition: 'all 0.2s ease',
+          }}
+          onClick={() => setViewMode('reports')}
+          title="Click to view all reported info and incident details"
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+            <span style={{ fontSize: '12px', fontWeight: 700, color: reportCounts.pending > 0 ? '#be123c' : '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+              Reported Incidents
+            </span>
+            <div style={{ width: '32px', height: '32px', borderRadius: '8px', background: reportCounts.pending > 0 ? '#fee2e2' : '#f1f5f9', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <ShieldAlert size={16} color={reportCounts.pending > 0 ? '#dc2626' : '#64748b'} />
+            </div>
+          </div>
+          <div style={{ fontSize: '32px', fontWeight: 900, color: reportCounts.pending > 0 ? '#dc2626' : '#0f172a' }}>
+            {reportCounts.total}{' '}
+            {reportCounts.pending > 0 && (
+              <span style={{ fontSize: '13px', fontWeight: 800, color: '#be123c', background: '#fee2e2', padding: '3px 8px', borderRadius: '999px', border: '1px solid #fecaca' }}>
+                {reportCounts.pending} Pending
+              </span>
+            )}
+          </div>
+          <div style={{ fontSize: '12px', color: reportCounts.pending > 0 ? '#b91c1c' : '#64748b', marginTop: '4px', fontWeight: reportCounts.pending > 0 ? 600 : 400 }}>
+            {reportCounts.total === 0 ? 'No reported incidents' : 'Click to inspect all info →'}
+          </div>
+        </div>
       </div>
+
+      {/* Pending Reports Attention Alert Banner */}
+      {reportCounts.pending > 0 && viewMode !== 'reports' && (
+        <div
+          style={{
+            background: 'linear-gradient(135deg, #fff1f2 0%, #fef2f2 100%)',
+            border: '1.5px solid #fecdd3',
+            borderRadius: '12px',
+            padding: '14px 20px',
+            marginBottom: '24px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '12px',
+            boxShadow: '0 2px 8px rgba(225, 29, 72, 0.08)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div style={{ background: '#fee2e2', borderRadius: '8px', padding: '6px', display: 'flex', color: '#dc2626' }}>
+              <ShieldAlert size={18} />
+            </div>
+            <div>
+              <span style={{ fontWeight: 800, color: '#9f1239', fontSize: '14px' }}>
+                {reportCounts.pending} Student Incident Report{reportCounts.pending > 1 ? 's' : ''} Pending Attention!
+              </span>
+              <p style={{ margin: 0, fontSize: '12.5px', color: '#be123c' }}>
+                Students reported issues with phone numbers, unresponsive partners, or attendance.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setViewMode('reports')}
+            className="btn-danger"
+            style={{ padding: '8px 18px', fontSize: '13px', background: '#dc2626', gap: '6px' }}
+          >
+            <ShieldAlert size={14} />
+            <span>View All Reported Info ({reportCounts.total})</span>
+          </button>
+        </div>
+      )}
 
       {/* Main Action Bar */}
       <div
@@ -689,6 +1012,28 @@ export function AdminDashboard({ token, onLogout }: AdminDashboardProps) {
               <span>Reset to Queue</span>
             </button>
           )}
+
+          {/* Add Student Button */}
+          <button
+            id="admin-add-student-btn"
+            type="button"
+            onClick={() => setShowAddStudentModal(true)}
+            className="btn-secondary"
+            style={{
+              padding: '14px 22px',
+              background: '#eef2ff',
+              borderColor: '#c7d2fe',
+              color: '#4f46e5',
+              fontWeight: 700,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+            }}
+            title="Add a new student to pass holders table"
+          >
+            <UserPlus size={16} />
+            <span>Add Student</span>
+          </button>
 
           {/* Clear Data Button */}
           <button
@@ -759,7 +1104,28 @@ export function AdminDashboard({ token, onLogout }: AdminDashboardProps) {
             </p>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+            <button
+              id="csv-add-student-btn"
+              type="button"
+              onClick={() => setShowAddStudentModal(true)}
+              className="btn-secondary"
+              style={{
+                padding: '6px 14px',
+                fontSize: '13px',
+                background: '#eef2ff',
+                borderColor: '#c7d2fe',
+                color: '#4f46e5',
+                fontWeight: 700,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+              }}
+              title="Add a single student to pass holders"
+            >
+              <UserPlus size={14} />
+              <span>Add Student</span>
+            </button>
             <span
               style={{
                 fontSize: '12.5px',
@@ -1052,18 +1418,30 @@ export function AdminDashboard({ token, onLogout }: AdminDashboardProps) {
           <input
             type="text"
             placeholder={
-              viewMode === 'passes'
+              viewMode === 'reports'
+                ? 'Search reported phone, reporter, reason...'
+                : viewMode === 'passes'
                 ? 'Search pass holder by name or phone...'
                 : viewMode === 'teams'
                 ? "Search team member or 'Team 1'..."
                 : 'Search name or phone...'
             }
-            value={viewMode === 'passes' ? passSearchQuery : searchQuery}
-            onChange={(e) =>
-              viewMode === 'passes'
-                ? setPassSearchQuery(e.target.value)
-                : setSearchQuery(e.target.value)
+            value={
+              viewMode === 'reports'
+                ? reportSearchQuery
+                : viewMode === 'passes'
+                ? passSearchQuery
+                : searchQuery
             }
+            onChange={(e) => {
+              if (viewMode === 'reports') {
+                setReportSearchQuery(e.target.value);
+              } else if (viewMode === 'passes') {
+                setPassSearchQuery(e.target.value);
+              } else {
+                setSearchQuery(e.target.value);
+              }
+            }}
             className="input-field"
             style={{ paddingLeft: '40px', paddingBlock: '10px', fontSize: '14px' }}
           />
@@ -1147,7 +1525,80 @@ export function AdminDashboard({ token, onLogout }: AdminDashboardProps) {
               <Ticket size={14} />
               <span>Pass Holders ({passCounts.total})</span>
             </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('reports')}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '6px 14px',
+                borderRadius: '999px',
+                fontSize: '12px',
+                fontWeight: 700,
+                border: 'none',
+                cursor: 'pointer',
+                background: viewMode === 'reports' ? '#dc2626' : 'transparent',
+                color: viewMode === 'reports' ? '#ffffff' : '#64748b',
+                boxShadow: viewMode === 'reports' ? '0 1px 3px rgba(220,38,38,0.3)' : 'none',
+                transition: 'all 0.15s ease',
+              }}
+            >
+              <ShieldAlert size={14} />
+              <span>Reports ({reportCounts.total})</span>
+              {reportCounts.pending > 0 && (
+                <span
+                  style={{
+                    marginLeft: '2px',
+                    background: viewMode === 'reports' ? '#fee2e2' : '#dc2626',
+                    color: viewMode === 'reports' ? '#dc2626' : '#ffffff',
+                    padding: '1px 6px',
+                    borderRadius: '999px',
+                    fontSize: '10px',
+                    fontWeight: 800,
+                  }}
+                >
+                  {reportCounts.pending}
+                </span>
+              )}
+            </button>
           </div>
+
+          {/* Filter Pills for Reports */}
+          {viewMode === 'reports' && (
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              {(
+                [
+                  { id: 'all', label: `All (${reportCounts.total})` },
+                  { id: 'pending', label: `Pending (${reportCounts.pending})` },
+                  { id: 'investigating', label: 'Investigating' },
+                  { id: 'resolved', label: `Resolved (${reportCounts.resolved})` },
+                  { id: 'dismissed', label: 'Dismissed' },
+                ] as const
+              ).map((f) => (
+                <button
+                  key={f.id}
+                  type="button"
+                  onClick={() => setReportFilterStatus(f.id)}
+                  style={{
+                    padding: '8px 16px',
+                    borderRadius: '999px',
+                    fontSize: '12px',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    border: '1px solid',
+                    transition: 'all 0.2s ease',
+                    background: reportFilterStatus === f.id ? '#fee2e2' : '#ffffff',
+                    borderColor: reportFilterStatus === f.id ? '#fca5a5' : '#e2e8f0',
+                    color: reportFilterStatus === f.id ? '#dc2626' : '#64748b',
+                    boxShadow: reportFilterStatus === f.id ? '0 1px 3px rgba(220, 38, 38, 0.15)' : 'none',
+                  }}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          )}
 
           {/* Filter Pills for Pass Holders */}
           {viewMode === 'passes' && (
@@ -1245,119 +1696,240 @@ export function AdminDashboard({ token, onLogout }: AdminDashboardProps) {
               </p>
               <p style={{ fontSize: '13px', marginTop: '4px' }}>
                 {passHolders.length === 0
-                  ? 'Upload a CSV above using "Upload / Update Pass CSV" to import pass records!'
+                  ? 'Upload a CSV above or click "Add Student" to create individual records!'
                   : 'Try adjusting your search query or filter tab.'}
               </p>
+              <button
+                id="passes-empty-add-student-btn"
+                type="button"
+                onClick={() => setShowAddStudentModal(true)}
+                className="btn-primary"
+                style={{
+                  width: 'auto',
+                  margin: '18px auto 0 auto',
+                  padding: '10px 22px',
+                  fontSize: '13.5px',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                }}
+              >
+                <UserPlus size={16} />
+                <span>Add Student to Table</span>
+              </button>
             </div>
           ) : (
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
-                <thead>
-                  <tr style={{ borderBottom: '1px solid #e2e8f0', background: '#f8fafc' }}>
-                    <th style={{ padding: '16px 20px', fontSize: '12px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
-                      Pass Holder
-                    </th>
-                    <th style={{ padding: '16px 20px', fontSize: '12px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
-                      Phone (Normalized)
-                    </th>
-                    <th style={{ padding: '16px 20px', fontSize: '12px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
-                      Active Pass
-                    </th>
-                    <th style={{ padding: '16px 20px', fontSize: '12px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
-                      Activity Passes
-                    </th>
-                    <th style={{ padding: '16px 20px', fontSize: '12px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
-                      Food Tokens
-                    </th>
-                    <th style={{ padding: '16px 20px', fontSize: '12px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
-                      Registration ID
-                    </th>
-                    <th style={{ padding: '16px 20px', fontSize: '12px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
-                      Team / College / Branch
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredPassHolders.map((h, hIdx) => {
-                    const isActive = Number(h.activity_passes) >= 1;
-                    return (
-                      <tr
-                        key={h.id || `pass-${hIdx}`}
-                        style={{ borderBottom: '1px solid #f1f5f9', transition: 'background 0.15s ease' }}
-                        onMouseEnter={(e) => (e.currentTarget.style.background = '#f8fafc')}
-                        onMouseLeave={(e) => (e.currentTarget.style.background = '#ffffff')}
-                      >
-                        {/* Name */}
-                        <td style={{ padding: '16px 20px' }}>
-                          <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '14.5px' }}>{h.name}</div>
-                          {h.email && <div style={{ fontSize: '12px', color: '#64748b' }}>{h.email}</div>}
-                        </td>
+            <div>
+              {/* Pass Holders Table Header Toolbar */}
+              <div
+                style={{
+                  padding: '14px 20px',
+                  background: '#f8fafc',
+                  borderBottom: '1px solid #e2e8f0',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  flexWrap: 'wrap',
+                  gap: '12px',
+                }}
+              >
+                <span style={{ fontSize: '13px', fontWeight: 700, color: '#475569' }}>
+                  Showing {filteredPassHolders.length} of {passCounts.total} Pass Holders
+                </span>
+                <button
+                  id="passes-table-toolbar-add-btn"
+                  type="button"
+                  onClick={() => setShowAddStudentModal(true)}
+                  className="btn-primary"
+                  style={{
+                    width: 'auto',
+                    padding: '8px 18px',
+                    fontSize: '13px',
+                    background: 'linear-gradient(135deg, #4f46e5 0%, #06b6d4 100%)',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                  }}
+                >
+                  <UserPlus size={15} />
+                  <span>Add Student</span>
+                </button>
+              </div>
 
-                        {/* Phone */}
-                        <td style={{ padding: '16px 20px' }}>
-                          <div style={{ fontFamily: 'monospace', color: '#4f46e5', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            <Phone size={13} color="#94a3b8" />
-                            <span>{h.phone_normalized}</span>
-                          </div>
-                          {h.phone && h.phone !== h.phone_normalized && (
-                            <div style={{ fontSize: '11px', color: '#94a3b8', fontFamily: 'monospace' }}>
-                              raw: {h.phone}
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid #e2e8f0', background: '#f8fafc' }}>
+                      <th style={{ padding: '16px 20px', fontSize: '12px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
+                        Pass Holder
+                      </th>
+                      <th style={{ padding: '16px 20px', fontSize: '12px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
+                        Phone (Normalized)
+                      </th>
+                      <th style={{ padding: '16px 20px', fontSize: '12px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
+                        Active Pass
+                      </th>
+                      <th style={{ padding: '16px 20px', fontSize: '12px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
+                        Activity Passes
+                      </th>
+                      <th style={{ padding: '16px 20px', fontSize: '12px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
+                        Food Tokens
+                      </th>
+                      <th style={{ padding: '16px 20px', fontSize: '12px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
+                        Registration ID
+                      </th>
+                      <th style={{ padding: '16px 20px', fontSize: '12px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
+                        Team / College / Branch
+                      </th>
+                      <th style={{ padding: '16px 20px', fontSize: '12px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', textAlign: 'right' }}>
+                        Actions
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredPassHolders.map((h, hIdx) => {
+                      const isActive = Number(h.activity_passes) >= 1;
+                      const isDeleting = deletingPassHolderId === (h.id || h.phone_normalized);
+
+                      return (
+                        <tr
+                          key={h.id || `pass-${hIdx}`}
+                          style={{ borderBottom: '1px solid #f1f5f9', transition: 'background 0.15s ease' }}
+                          onMouseEnter={(e) => (e.currentTarget.style.background = '#f8fafc')}
+                          onMouseLeave={(e) => (e.currentTarget.style.background = '#ffffff')}
+                        >
+                          {/* Name */}
+                          <td style={{ padding: '16px 20px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                              <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '14.5px' }}>{h.name}</div>
+                              {reportsByPhoneMap.get(h.phone_normalized) && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setReportSearchQuery(h.phone_normalized);
+                                    setViewMode('reports');
+                                  }}
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '3px',
+                                    padding: '2px 7px',
+                                    borderRadius: '999px',
+                                    fontSize: '11px',
+                                    fontWeight: 800,
+                                    background: '#fee2e2',
+                                    color: '#dc2626',
+                                    border: '1px solid #fecaca',
+                                    cursor: 'pointer',
+                                  }}
+                                  title="Student has reports filed. Click to view all reports."
+                                >
+                                  <ShieldAlert size={11} />
+                                  <span>Reported ({reportsByPhoneMap.get(h.phone_normalized)!.length})</span>
+                                </button>
+                              )}
                             </div>
-                          )}
-                        </td>
+                            {h.email && <div style={{ fontSize: '12px', color: '#64748b' }}>{h.email}</div>}
+                          </td>
 
-                        {/* Active Pass: Yes/No */}
-                        <td style={{ padding: '16px 20px' }}>
-                          <span
-                            style={{
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: '4px',
-                              padding: '4px 10px',
-                              borderRadius: '999px',
-                              fontSize: '12px',
-                              fontWeight: 700,
-                              background: isActive ? '#ecfdf5' : '#f1f5f9',
-                              color: isActive ? '#059669' : '#64748b',
-                              border: `1px solid ${isActive ? '#a7f3d0' : '#e2e8f0'}`,
-                            }}
-                          >
-                            {isActive ? <CheckCircle2 size={13} /> : <AlertCircle size={13} />}
-                            {isActive ? 'Yes' : 'No'}
-                          </span>
-                        </td>
-
-                        {/* Activity Passes Count */}
-                        <td style={{ padding: '16px 20px' }}>
-                          <span style={{ fontWeight: 800, fontSize: '14px', color: isActive ? '#059669' : '#64748b' }}>
-                            {h.activity_passes}
-                          </span>
-                        </td>
-
-                        {/* Food Tokens */}
-                        <td style={{ padding: '16px 20px', fontSize: '14px', color: '#334155' }}>
-                          {h.food_tokens ?? 0}
-                        </td>
-
-                        {/* Registration ID */}
-                        <td style={{ padding: '16px 20px', fontFamily: 'monospace', fontSize: '13px', color: '#64748b' }}>
-                          {h.registration_id || '—'}
-                        </td>
-
-                        {/* Team / College / Branch */}
-                        <td style={{ padding: '16px 20px', fontSize: '13px', color: '#475569' }}>
-                          <div>{h.team_name ? <strong>{h.team_name}</strong> : '—'}</div>
-                          {(h.college || h.branch) && (
-                            <div style={{ fontSize: '12px', color: '#64748b' }}>
-                              {[h.branch, h.college].filter(Boolean).join(' • ')}
+                          {/* Phone */}
+                          <td style={{ padding: '16px 20px' }}>
+                            <div style={{ fontFamily: 'monospace', color: '#4f46e5', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <Phone size={13} color="#94a3b8" />
+                              <span>{h.phone_normalized}</span>
                             </div>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                            {h.phone && h.phone !== h.phone_normalized && (
+                              <div style={{ fontSize: '11px', color: '#94a3b8', fontFamily: 'monospace' }}>
+                                raw: {h.phone}
+                              </div>
+                            )}
+                          </td>
+
+                          {/* Active Pass: Yes/No */}
+                          <td style={{ padding: '16px 20px' }}>
+                            <span
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                                padding: '4px 10px',
+                                borderRadius: '999px',
+                                fontSize: '12px',
+                                fontWeight: 700,
+                                background: isActive ? '#ecfdf5' : '#f1f5f9',
+                                color: isActive ? '#059669' : '#64748b',
+                                border: `1px solid ${isActive ? '#a7f3d0' : '#e2e8f0'}`,
+                              }}
+                            >
+                              {isActive ? <CheckCircle2 size={13} /> : <AlertCircle size={13} />}
+                              {isActive ? 'Yes' : 'No'}
+                            </span>
+                          </td>
+
+                          {/* Activity Passes Count */}
+                          <td style={{ padding: '16px 20px' }}>
+                            <span style={{ fontWeight: 800, fontSize: '14px', color: isActive ? '#059669' : '#64748b' }}>
+                              {h.activity_passes}
+                            </span>
+                          </td>
+
+                          {/* Food Tokens */}
+                          <td style={{ padding: '16px 20px', fontSize: '14px', color: '#334155' }}>
+                            {h.food_tokens ?? 0}
+                          </td>
+
+                          {/* Registration ID */}
+                          <td style={{ padding: '16px 20px', fontFamily: 'monospace', fontSize: '13px', color: '#64748b' }}>
+                            {h.registration_id || '—'}
+                          </td>
+
+                          {/* Team / College / Branch */}
+                          <td style={{ padding: '16px 20px', fontSize: '13px', color: '#475569' }}>
+                            <div>{h.team_name ? <strong>{h.team_name}</strong> : '—'}</div>
+                            {h.role && (
+                              <div style={{ fontSize: '11.5px', color: '#4f46e5', fontWeight: 600 }}>
+                                {h.role}
+                              </div>
+                            )}
+                            {(h.college || h.branch) && (
+                              <div style={{ fontSize: '12px', color: '#64748b' }}>
+                                {[h.branch, h.college].filter(Boolean).join(' • ')}
+                              </div>
+                            )}
+                          </td>
+
+                          {/* Actions */}
+                          <td style={{ padding: '16px 20px', textAlign: 'right' }}>
+                            <button
+                              type="button"
+                              onClick={() => handleDeletePassHolder(h)}
+                              disabled={isDeleting}
+                              style={{
+                                background: '#fff1f2',
+                                border: '1px solid #fecdd3',
+                                color: '#e11d48',
+                                padding: '6px 12px',
+                                borderRadius: '8px',
+                                fontSize: '12px',
+                                fontWeight: 700,
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                                transition: 'all 0.15s ease',
+                              }}
+                              title={`Delete ${h.name} from pass holders`}
+                            >
+                              <Trash2 size={13} className={isDeleting ? 'animate-spin' : ''} />
+                              <span>{isDeleting ? 'Deleting...' : 'Delete'}</span>
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </div>
@@ -1478,21 +2050,54 @@ export function AdminDashboard({ token, onLogout }: AdminDashboardProps) {
                       >
                         <Users size={14} /> Team #{pair.teamNum}
                       </span>
-                      <span
-                        style={{
-                          fontSize: '11px',
-                          color: '#059669',
-                          fontWeight: 700,
-                          background: '#ecfdf5',
-                          padding: '3px 8px',
-                          borderRadius: '999px',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '4px',
-                        }}
-                      >
-                        <Dices size={12} /> Paired
-                      </span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        {((reportsByPhoneMap.get(normalizePhone(pair.p1.phone))?.length ?? 0) > 0 ||
+                          (reportsByPhoneMap.get(normalizePhone(pair.p2.phone))?.length ?? 0) > 0) && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const ph =
+                                (reportsByPhoneMap.get(normalizePhone(pair.p1.phone))?.length ?? 0) > 0
+                                  ? pair.p1.phone
+                                  : pair.p2.phone;
+                              setReportSearchQuery(ph);
+                              setViewMode('reports');
+                            }}
+                            style={{
+                              fontSize: '11px',
+                              color: '#dc2626',
+                              fontWeight: 800,
+                              background: '#fee2e2',
+                              border: '1px solid #fecaca',
+                              padding: '2px 8px',
+                              borderRadius: '999px',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              cursor: 'pointer',
+                            }}
+                            title="A partner in this team was reported. Click to view."
+                          >
+                            <ShieldAlert size={11} />
+                            <span>Reported</span>
+                          </button>
+                        )}
+                        <span
+                          style={{
+                            fontSize: '11px',
+                            color: '#059669',
+                            fontWeight: 700,
+                            background: '#ecfdf5',
+                            padding: '3px 8px',
+                            borderRadius: '999px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                          }}
+                        >
+                          <Dices size={12} /> Paired
+                        </span>
+                      </div>
                     </div>
 
                     {/* Member 1 & 2 */}
@@ -1573,6 +2178,487 @@ export function AdminDashboard({ token, onLogout }: AdminDashboardProps) {
             </div>
           )}
         </div>
+      ) : viewMode === 'reports' ? (
+        /* VIEW MODE 4: REPORTS TABLE */
+        <div className="glass-panel" style={{ overflow: 'hidden', background: '#ffffff', border: '1px solid #e2e8f0' }}>
+          {loadingReports && reports.length === 0 ? (
+            <div style={{ padding: '60px 20px', textAlign: 'center', color: '#64748b' }}>
+              <div
+                style={{
+                  width: '32px',
+                  height: '32px',
+                  borderRadius: '50%',
+                  border: '3px solid rgba(220, 38, 38, 0.2)',
+                  borderTopColor: '#dc2626',
+                  animation: 'spin 1s linear infinite',
+                  margin: '0 auto 12px auto',
+                }}
+              />
+              <p>Loading student reports...</p>
+            </div>
+          ) : filteredReports.length === 0 ? (
+            <div style={{ padding: '60px 20px', textAlign: 'center', color: '#64748b' }}>
+              <ShieldAlert size={40} style={{ margin: '0 auto 12px auto', opacity: 0.35, color: '#dc2626' }} />
+              <p style={{ fontSize: '17px', fontWeight: 700, color: '#0f172a' }}>
+                {reports.length === 0 ? 'No reports submitted yet' : 'No matching reports found'}
+              </p>
+              <p style={{ fontSize: '13.5px', marginTop: '6px', color: '#64748b' }}>
+                {reports.length === 0
+                  ? 'When students submit reports about unreachable partners or issues via the student portal, they will appear here in real time.'
+                  : 'Try selecting a different filter status or clearing your search term.'}
+              </p>
+            </div>
+          ) : (
+            <div>
+              <div
+                style={{
+                  padding: '16px 20px',
+                  borderBottom: '1px solid #f1f5f9',
+                  background: '#fef2f2',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  flexWrap: 'wrap',
+                  gap: '10px',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <ShieldAlert size={16} color="#dc2626" />
+                  <span style={{ fontSize: '13px', fontWeight: 800, color: '#991b1b' }}>
+                    Showing {filteredReports.length} of {reports.length} Student Incident Reports
+                  </span>
+                </div>
+                <span style={{ fontSize: '12px', fontWeight: 700, color: '#b91c1c' }}>
+                  {reportCounts.pending} Pending Attention • {reportCounts.resolved} Resolved
+                </span>
+              </div>
+
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid #e2e8f0', background: '#f8fafc' }}>
+                      <th style={{ padding: '16px 20px', fontSize: '12px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
+                        Reported Student & Phone
+                      </th>
+                      <th style={{ padding: '16px 20px', fontSize: '12px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
+                        Category
+                      </th>
+                      <th style={{ padding: '16px 20px', fontSize: '12px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', minWidth: '220px' }}>
+                        Details / Statement
+                      </th>
+                      <th style={{ padding: '16px 20px', fontSize: '12px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
+                        Reported By (Complainant)
+                      </th>
+                      <th style={{ padding: '16px 20px', fontSize: '12px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
+                        Status
+                      </th>
+                      <th style={{ padding: '16px 20px', fontSize: '12px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
+                        Submitted At
+                      </th>
+                      <th style={{ padding: '16px 20px', fontSize: '12px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', textAlign: 'right' }}>
+                        Actions
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredReports.map((r) => {
+                      const categoryLabels: Record<string, { label: string; bg: string; color: string; border: string }> = {
+                        unresponsive: { label: 'Unresponsive Partner', bg: '#fffbeb', color: '#b45309', border: '#fde68a' },
+                        wrong_number: { label: 'Wrong / Fake Number', bg: '#fef2f2', color: '#b91c1c', border: '#fecaca' },
+                        absent: { label: 'Absent / Left Event', bg: '#f5f3ff', color: '#6d28d9', border: '#ddd6fe' },
+                        inappropriate: { label: 'Inappropriate Behavior', bg: '#fff1f2', color: '#be123c', border: '#fecdd3' },
+                        other: { label: 'Other Incident', bg: '#f1f5f9', color: '#475569', border: '#cbd5e1' },
+                      };
+
+                      const catMeta = categoryLabels[r.category] || {
+                        label: r.category,
+                        bg: '#f1f5f9',
+                        color: '#475569',
+                        border: '#cbd5e1',
+                      };
+
+                      const reportedInfo = getStudentMatchDetails(r.reported_phone_normalized || r.reported_phone);
+                      const reporterInfo = getStudentMatchDetails(r.reporter_phone);
+                      const isTeammate = Boolean(
+                        reportedInfo?.partner?.phone &&
+                          r.reporter_phone &&
+                          (reportedInfo.partner.phone === r.reporter_phone ||
+                            normalizePhone(reportedInfo.partner.phone) === normalizePhone(r.reporter_phone))
+                      );
+
+                      return (
+                        <tr
+                          key={r.id}
+                          style={{
+                            borderBottom: '1px solid #f1f5f9',
+                            transition: 'background 0.15s ease',
+                          }}
+                          onMouseEnter={(e) => (e.currentTarget.style.background = '#fcfdfe')}
+                          onMouseLeave={(e) => (e.currentTarget.style.background = '#ffffff')}
+                        >
+                          {/* Reported Student & Number */}
+                          <td style={{ padding: '16px 20px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px', flexWrap: 'wrap' }}>
+                              <div style={{ fontWeight: 800, color: '#0f172a', fontSize: '14.5px' }}>
+                                {reportedInfo?.participant?.name || reportedInfo?.passHolder?.name || 'Unknown Student'}
+                              </div>
+                              {reportedInfo?.passHolder?.team_name && (
+                                <span style={{ fontSize: '11px', fontWeight: 700, background: '#eef2ff', color: '#4f46e5', padding: '1px 7px', borderRadius: '4px', border: '1px solid #c7d2fe' }}>
+                                  {reportedInfo.passHolder.team_name}
+                                </span>
+                              )}
+                            </div>
+
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <span style={{ fontFamily: 'monospace', fontWeight: 800, color: '#dc2626', fontSize: '13.5px' }}>
+                                {formatPhoneForDisplay(r.reported_phone_normalized || r.reported_phone)}
+                              </span>
+                              <a
+                                href={`tel:${r.reported_phone_normalized || r.reported_phone}`}
+                                style={{
+                                  color: '#059669',
+                                  background: '#ecfdf5',
+                                  padding: '3px 6px',
+                                  borderRadius: '5px',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  border: '1px solid #a7f3d0',
+                                }}
+                                title="Call reported phone to verify"
+                              >
+                                <Phone size={12} />
+                              </a>
+                            </div>
+
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '6px', flexWrap: 'wrap' }}>
+                              {reportedInfo?.passHolder?.registration_id && (
+                                <span style={{ fontSize: '11px', fontFamily: 'monospace', color: '#64748b', background: '#f1f5f9', padding: '1px 6px', borderRadius: '4px' }}>
+                                  {reportedInfo.passHolder.registration_id}
+                                </span>
+                              )}
+                              {reportedInfo?.participant?.status === 'matched' ? (
+                                <span style={{ fontSize: '11px', fontWeight: 700, color: '#059669', background: '#ecfdf5', padding: '1px 6px', borderRadius: '4px' }}>
+                                  🤝 Paired with {reportedInfo.partner?.name || 'Partner'}
+                                </span>
+                              ) : reportedInfo?.participant?.status === 'waiting' ? (
+                                <span style={{ fontSize: '11px', fontWeight: 700, color: '#d97706', background: '#fffbeb', padding: '1px 6px', borderRadius: '4px' }}>
+                                  ⏳ In Waiting Queue
+                                </span>
+                              ) : null}
+                              {Number(reportedInfo?.passHolder?.activity_passes) > 0 && (
+                                <span style={{ fontSize: '10.5px', fontWeight: 700, color: '#059669', background: '#f0fdf4', border: '1px solid #bbf7d0', padding: '1px 5px', borderRadius: '4px' }}>
+                                  Passes: {reportedInfo?.passHolder?.activity_passes}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+
+                          {/* Category */}
+                          <td style={{ padding: '16px 20px' }}>
+                            <span
+                              style={{
+                                display: 'inline-block',
+                                padding: '3px 10px',
+                                borderRadius: '999px',
+                                fontSize: '11.5px',
+                                fontWeight: 700,
+                                background: catMeta.bg,
+                                color: catMeta.color,
+                                border: `1px solid ${catMeta.border}`,
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
+                              {catMeta.label}
+                            </span>
+                          </td>
+
+                          {/* Details / Statement */}
+                          <td style={{ padding: '16px 20px', maxWidth: '300px' }}>
+                            <div
+                              style={{
+                                fontSize: '13px',
+                                color: '#1e293b',
+                                lineHeight: '1.5',
+                                background: '#f8fafc',
+                                padding: '8px 12px',
+                                borderRadius: '8px',
+                                border: '1px solid #e2e8f0',
+                                wordBreak: 'break-word',
+                              }}
+                            >
+                              {r.details || <span style={{ color: '#94a3b8', fontStyle: 'italic' }}>No additional details provided</span>}
+                            </div>
+                          </td>
+
+                          {/* Reported By (Complainant) */}
+                          <td style={{ padding: '16px 20px' }}>
+                            <div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '13.5px' }}>
+                                  {r.reporter_name || reporterInfo?.participant?.name || reporterInfo?.passHolder?.name || 'Anonymous Student'}
+                                </div>
+                                {isTeammate && (
+                                  <span
+                                    style={{
+                                      fontSize: '10px',
+                                      fontWeight: 800,
+                                      background: '#fee2e2',
+                                      color: '#be123c',
+                                      border: '1px solid #fecaca',
+                                      padding: '1px 6px',
+                                      borderRadius: '999px',
+                                    }}
+                                    title="Reporter is the assigned partner of this student"
+                                  >
+                                    ⚡ Partner
+                                  </span>
+                                )}
+                              </div>
+                              {r.reporter_phone && (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '2px' }}>
+                                  <span style={{ fontFamily: 'monospace', fontSize: '12px', color: '#4f46e5' }}>
+                                    {formatPhoneForDisplay(r.reporter_phone)}
+                                  </span>
+                                  <a
+                                    href={`tel:${r.reporter_phone}`}
+                                    style={{
+                                      color: '#059669',
+                                      background: '#ecfdf5',
+                                      padding: '2px 5px',
+                                      borderRadius: '4px',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      border: '1px solid #a7f3d0',
+                                    }}
+                                    title="Call reporter"
+                                  >
+                                    <Phone size={10} />
+                                  </a>
+                                </div>
+                              )}
+                              {reporterInfo?.passHolder?.team_name && (
+                                <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>
+                                  Team: {reporterInfo.passHolder.team_name}
+                                </div>
+                              )}
+                            </div>
+                          </td>
+
+                          {/* Status */}
+                          <td style={{ padding: '16px 20px' }}>
+                            {r.status === 'resolved' ? (
+                              <span
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  padding: '4px 10px',
+                                  borderRadius: '999px',
+                                  fontSize: '12px',
+                                  fontWeight: 700,
+                                  background: '#ecfdf5',
+                                  color: '#059669',
+                                  border: '1px solid #a7f3d0',
+                                }}
+                              >
+                                <CheckCircle2 size={13} /> Resolved
+                              </span>
+                            ) : r.status === 'investigating' ? (
+                              <span
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  padding: '4px 10px',
+                                  borderRadius: '999px',
+                                  fontSize: '12px',
+                                  fontWeight: 700,
+                                  background: '#eff6ff',
+                                  color: '#2563eb',
+                                  border: '1px solid #bfdbfe',
+                                }}
+                              >
+                                <Search size={13} /> Investigating
+                              </span>
+                            ) : r.status === 'dismissed' ? (
+                              <span
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  padding: '4px 10px',
+                                  borderRadius: '999px',
+                                  fontSize: '12px',
+                                  fontWeight: 700,
+                                  background: '#f1f5f9',
+                                  color: '#64748b',
+                                  border: '1px solid #cbd5e1',
+                                }}
+                              >
+                                <XCircle size={13} /> Dismissed
+                              </span>
+                            ) : (
+                              <span
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  padding: '4px 10px',
+                                  borderRadius: '999px',
+                                  fontSize: '12px',
+                                  fontWeight: 700,
+                                  background: '#fffbeb',
+                                  color: '#d97706',
+                                  border: '1px solid #fde68a',
+                                }}
+                              >
+                                <Clock size={13} /> Pending
+                              </span>
+                            )}
+                          </td>
+
+                          {/* Created At */}
+                          <td style={{ padding: '16px 20px', fontSize: '12.5px', color: '#64748b', whiteSpace: 'nowrap' }}>
+                            {new Date(r.created_at).toLocaleString([], {
+                              month: 'short',
+                              day: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })}
+                          </td>
+
+                          {/* Actions */}
+                          <td style={{ padding: '16px 20px', textAlign: 'right' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '6px', flexWrap: 'wrap' }}>
+                              {/* View All Info Button */}
+                              <button
+                                type="button"
+                                onClick={() => setSelectedReportForDetails(r)}
+                                style={{
+                                  background: '#eef2ff',
+                                  border: '1px solid #c7d2fe',
+                                  color: '#4f46e5',
+                                  padding: '5px 11px',
+                                  borderRadius: '6px',
+                                  fontSize: '12px',
+                                  fontWeight: 700,
+                                  cursor: 'pointer',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '5px',
+                                  transition: 'all 0.15s ease',
+                                }}
+                                title="View complete incident dossier and all student information"
+                              >
+                                <Eye size={13} />
+                                <span>View All Info</span>
+                              </button>
+
+                              {r.status !== 'resolved' && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleUpdateReportStatus(r.id, 'resolved')}
+                                  style={{
+                                    background: '#ecfdf5',
+                                    border: '1px solid #a7f3d0',
+                                    color: '#059669',
+                                    padding: '5px 10px',
+                                    borderRadius: '6px',
+                                    fontSize: '11.5px',
+                                    fontWeight: 700,
+                                    cursor: 'pointer',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '4px',
+                                    transition: 'all 0.15s ease',
+                                  }}
+                                  title="Mark as resolved"
+                                >
+                                  <Check size={12} />
+                                  <span>Resolve</span>
+                                </button>
+                              )}
+
+                              {r.status === 'pending' && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleUpdateReportStatus(r.id, 'investigating')}
+                                  style={{
+                                    background: '#eff6ff',
+                                    border: '1px solid #bfdbfe',
+                                    color: '#2563eb',
+                                    padding: '5px 10px',
+                                    borderRadius: '6px',
+                                    fontSize: '11.5px',
+                                    fontWeight: 700,
+                                    cursor: 'pointer',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '4px',
+                                    transition: 'all 0.15s ease',
+                                  }}
+                                  title="Mark as under investigation"
+                                >
+                                  <Search size={12} />
+                                  <span>Investigate</span>
+                                </button>
+                              )}
+
+                              {r.status !== 'dismissed' && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleUpdateReportStatus(r.id, 'dismissed')}
+                                  style={{
+                                    background: '#f8fafc',
+                                    border: '1px solid #cbd5e1',
+                                    color: '#64748b',
+                                    padding: '5px 10px',
+                                    borderRadius: '6px',
+                                    fontSize: '11.5px',
+                                    fontWeight: 700,
+                                    cursor: 'pointer',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '4px',
+                                    transition: 'all 0.15s ease',
+                                  }}
+                                  title="Dismiss report"
+                                >
+                                  <XCircle size={12} />
+                                  <span>Dismiss</span>
+                                </button>
+                              )}
+
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteReport(r)}
+                                style={{
+                                  background: '#fff1f2',
+                                  border: '1px solid #fecdd3',
+                                  color: '#e11d48',
+                                  padding: '5px 8px',
+                                  borderRadius: '6px',
+                                  fontSize: '11.5px',
+                                  cursor: 'pointer',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  transition: 'all 0.15s ease',
+                                }}
+                                title="Permanently delete report"
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
       ) : (
         /* VIEW MODE 2: ALL PARTICIPANTS TABLE */
         <div className="glass-panel" style={{ overflow: 'hidden', background: '#ffffff', border: '1px solid #e2e8f0' }}>
@@ -1642,7 +2728,7 @@ export function AdminDashboard({ token, onLogout }: AdminDashboardProps) {
                       >
                         {/* Name */}
                         <td style={{ padding: '16px 20px' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                             <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '15px' }}>
                               {p.name}
                             </div>
@@ -1660,6 +2746,32 @@ export function AdminDashboard({ token, onLogout }: AdminDashboardProps) {
                               >
                                 Team #{teamNum}
                               </span>
+                            )}
+                            {reportsByPhoneMap.get(normalizePhone(p.phone)) && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setReportSearchQuery(p.phone);
+                                  setViewMode('reports');
+                                }}
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  padding: '2px 8px',
+                                  borderRadius: '999px',
+                                  fontSize: '11px',
+                                  fontWeight: 800,
+                                  background: '#fee2e2',
+                                  color: '#dc2626',
+                                  border: '1px solid #fecaca',
+                                  cursor: 'pointer',
+                                }}
+                                title="This student has been reported. Click to view all reported info."
+                              >
+                                <ShieldAlert size={12} />
+                                <span>Reported ({reportsByPhoneMap.get(normalizePhone(p.phone))!.length})</span>
+                              </button>
                             )}
                           </div>
                         </td>

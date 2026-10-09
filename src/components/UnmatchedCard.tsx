@@ -1,6 +1,6 @@
 'use client';
 
-import { UserX, RefreshCw, HelpCircle, Sparkles } from 'lucide-react';
+import { UserX, RefreshCw, HelpCircle, Sparkles, ShieldAlert } from 'lucide-react';
 import { Participant } from '@/lib/types';
 import { formatPhoneForDisplay } from '@/lib/validation';
 
@@ -8,9 +8,10 @@ interface UnmatchedCardProps {
   participant: Participant;
   isPolling?: boolean;
   onManualRefresh?: () => void;
+  onOpenReport?: () => void;
 }
 
-export function UnmatchedCard({ participant, isPolling, onManualRefresh }: UnmatchedCardProps) {
+export function UnmatchedCard({ participant, isPolling, onManualRefresh, onOpenReport }: UnmatchedCardProps) {
   return (
     <div
       className="glass-panel-glow animate-pop-in"
@@ -104,6 +105,32 @@ export function UnmatchedCard({ participant, isPolling, onManualRefresh }: Unmat
           <RefreshCw size={15} className={isPolling ? 'animate-spin' : ''} />
           <span>{isPolling ? 'Checking for rematches...' : 'Check For Rematch'}</span>
         </button>
+      )}
+
+      {onOpenReport && (
+        <div style={{ marginTop: '18px', paddingTop: '14px', borderTop: '1px solid #fed7aa' }}>
+          <button
+            type="button"
+            onClick={onOpenReport}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: '#94a3b8',
+              fontSize: '12px',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '5px',
+              padding: '4px 8px',
+              transition: 'color 0.15s ease',
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.color = '#e11d48')}
+            onMouseLeave={(e) => (e.currentTarget.style.color = '#94a3b8')}
+          >
+            <ShieldAlert size={13} />
+            <span>Facing an issue? Report a phone number</span>
+          </button>
+        </div>
       )}
     </div>
   );
