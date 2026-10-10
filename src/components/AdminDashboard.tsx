@@ -27,6 +27,8 @@ import {
   AlertTriangle,
   UserPlus,
   ShieldAlert,
+  Shield,
+  ShieldOff,
   Check,
   Flag,
   XCircle,
@@ -87,6 +89,10 @@ export function AdminDashboard({ token, onLogout }: AdminDashboardProps) {
   const [reportSearchQuery, setReportSearchQuery] = useState('');
   const [reportFilterStatus, setReportFilterStatus] = useState<'all' | 'pending' | 'investigating' | 'resolved' | 'dismissed'>('all');
   const [selectedReportForDetails, setSelectedReportForDetails] = useState<Report | null>(null);
+
+  // Pass Check Toggle State
+  const [passCheckEnabled, setPassCheckEnabled] = useState<boolean>(true);
+  const [togglingPassCheck, setTogglingPassCheck] = useState(false);
 
   const showToast = (text: string, type: 'success' | 'error' | 'info' = 'success') => {
     setToastMessage({ text, type });
@@ -270,6 +276,65 @@ export function AdminDashboard({ token, onLogout }: AdminDashboardProps) {
     }
   }, [token, onLogout]);
 
+  // Fetch current settings (pass check toggle)
+  const fetchSettings = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/admin/settings?_t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: {
+          'x-admin-token': token,
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+        },
+      });
+
+      if (res.status === 401) {
+        onLogout();
+        return;
+      }
+
+      const data = await res.json();
+      if (data.success && data.settings) {
+        setPassCheckEnabled(data.settings.passCheckEnabled);
+      }
+    } catch (err) {
+      console.error('Failed to load settings:', err);
+    }
+  }, [token, onLogout]);
+
+  // Toggle pass check on/off
+  const handleTogglePassCheck = async () => {
+    setTogglingPassCheck(true);
+    try {
+      const newValue = !passCheckEnabled;
+      const res = await fetch('/api/admin/settings', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-token': token,
+        },
+        body: JSON.stringify({ passCheckEnabled: newValue }),
+      });
+
+      if (res.status === 401) {
+        showToast('Admin session expired. Please re-enter passcode.', 'error');
+        onLogout();
+        return;
+      }
+
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setPassCheckEnabled(data.settings.passCheckEnabled);
+        showToast(data.message, data.settings.passCheckEnabled ? 'info' : 'success');
+      } else {
+        showToast(data.error || 'Failed to update setting.', 'error');
+      }
+    } catch (err: any) {
+      showToast(err?.message || 'Network error updating setting.', 'error');
+    } finally {
+      setTogglingPassCheck(false);
+    }
+  };
+
   const handleUpdateReportStatus = async (reportId: string, status: ReportStatus) => {
     try {
       const res = await fetch('/api/admin/reports', {
@@ -333,7 +398,8 @@ export function AdminDashboard({ token, onLogout }: AdminDashboardProps) {
     fetchParticipants();
     fetchPassHolders();
     fetchReports();
-  }, [fetchParticipants, fetchPassHolders, fetchReports]);
+    fetchSettings();
+  }, [fetchParticipants, fetchPassHolders, fetchReports, fetchSettings]);
 
   // Real-time channel or polling
   useEffect(() => {
@@ -1058,6 +1124,127 @@ export function AdminDashboard({ token, onLogout }: AdminDashboardProps) {
             <span>Need at least 2 participants to run 1-to-1 pairing</span>
           )}
         </div>
+      </div>
+
+      {/* Pass Verification Toggle */}
+      <div
+        className="glass-panel"
+        style={{
+          padding: '20px 24px',
+          marginBottom: '28px',
+          background: passCheckEnabled ? '#f0fdf4' : '#fefce8',
+          border: `1.5px solid ${passCheckEnabled ? '#bbf7d0' : '#fde68a'}`,
+          borderRadius: '16px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '16px',
+          flexWrap: 'wrap',
+          transition: 'all 0.3s ease',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1 }}>
+          <div
+            style={{
+              width: '40px',
+              height: '40px',
+              borderRadius: '10px',
+              background: passCheckEnabled ? '#dcfce7' : '#fef9c3',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              transition: 'all 0.3s ease',
+            }}
+          >
+            {passCheckEnabled ? (
+              <Shield size={20} color="#16a34a" />
+            ) : (
+              <ShieldOff size={20} color="#ca8a04" />
+            )}
+          </div>
+          <div>
+            <div
+              style={{
+                fontSize: '15px',
+                fontWeight: 800,
+                color: passCheckEnabled ? '#166534' : '#854d0e',
+                letterSpacing: '-0.2px',
+              }}
+            >
+              Pass Verification: {passCheckEnabled ? 'ON' : 'OFF'}
+            </div>
+            <div
+              style={{
+                fontSize: '12.5px',
+                color: passCheckEnabled ? '#15803d' : '#a16207',
+                marginTop: '2px',
+                lineHeight: '1.4',
+              }}
+            >
+              {passCheckEnabled
+                ? 'Only students with an active activity pass can register and join matching.'
+                : 'Anyone can register and join matching — no pass required.'}
+            </div>
+          </div>
+        </div>
+
+        <button
+          id="admin-pass-check-toggle"
+          type="button"
+          onClick={handleTogglePassCheck}
+          disabled={togglingPassCheck}
+          style={{
+            position: 'relative',
+            width: '56px',
+            height: '30px',
+            borderRadius: '999px',
+            border: 'none',
+            cursor: togglingPassCheck ? 'wait' : 'pointer',
+            background: passCheckEnabled
+              ? 'linear-gradient(135deg, #22c55e 0%, #16a34a 100%)'
+              : '#d1d5db',
+            transition: 'background 0.3s ease',
+            flexShrink: 0,
+            padding: 0,
+            outline: 'none',
+            boxShadow: passCheckEnabled
+              ? '0 2px 8px rgba(34, 197, 94, 0.4)'
+              : '0 1px 4px rgba(0,0,0,0.1)',
+          }}
+          title={passCheckEnabled ? 'Click to DISABLE pass verification' : 'Click to ENABLE pass verification'}
+        >
+          <div
+            style={{
+              position: 'absolute',
+              top: '3px',
+              left: passCheckEnabled ? '29px' : '3px',
+              width: '24px',
+              height: '24px',
+              borderRadius: '50%',
+              background: '#ffffff',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+              transition: 'left 0.3s cubic-bezier(0.68, -0.55, 0.27, 1.55)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            {togglingPassCheck ? (
+              <div
+                style={{
+                  width: '12px',
+                  height: '12px',
+                  borderRadius: '50%',
+                  border: '2px solid #d1d5db',
+                  borderTopColor: '#6b7280',
+                  animation: 'spin 0.6s linear infinite',
+                }}
+              />
+            ) : passCheckEnabled ? (
+              <Check size={12} color="#16a34a" strokeWidth={3} />
+            ) : null}
+          </div>
+        </button>
       </div>
 
       {/* ============================================================== */}
